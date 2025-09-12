@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ETH Options Dashboard (Bybit)</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #111111;
+        --muted: rgba(0,0,0,.65);
+        --border: rgba(0,0,0,.15);
+        --card: #ffffff;
+        --surface: #ffffff;
+        --accent: #2563eb;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f1115;
+          --fg: #e6e6e6;
+          --muted: rgba(255,255,255,.75);
+          --border: rgba(255,255,255,.14);
+          --card: #141821;
+          --surface: #12161f;
+        }
+      }
+      html, body, #root { height: 100%; margin: 0; }
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji", "Segoe UI Emoji"; background: var(--bg); color: var(--fg); }
+      .container { max-width: 1100px; margin: 0 auto; padding: 16px; }
+      .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; }
+      .card { border: 1px solid var(--border); background: var(--card); border-radius: 10px; padding: 12px; flex: 1; min-width: 260px; }
+      .muted { color: var(--muted); }
+      .status { font-weight: 600; }
+      .status.green { color: #2e7d32; }
+      .status.yellow { color: #f9a825; }
+      .status.red { color: #c62828; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { padding: 8px; border-bottom: 1px solid var(--border); text-align: left; }
+      th { position: sticky; top: 0; background: var(--card); }
+      input, select, button { padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); }
+      select, option { background-color: var(--surface); color: var(--fg); }
+      button.primary { background: var(--accent); color: white; border: none; }
+      button.ghost { background: transparent; color: var(--fg); }
+      .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+      @media (max-width: 680px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+  </html>

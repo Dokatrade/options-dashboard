@@ -1,0 +1,242 @@
+import React from 'react';
+import { useStore } from '../store/store';
+import { fetchInstruments, fetchOptionTickers, midPrice } from '../services/bybit';
+import { subscribeOptionTicker } from '../services/ws';
+import type { Position, InstrumentInfo, Leg, OptionType } from '../utils/types';
+
+type Props = { id: string; onClose: () => void };
+
+export function EditPositionModal({ id, onClose }: Props) {
+  const position = useStore((s) => s.positions.find(p => p.id === id));
+  const updatePosition = useStore((s) => s.updatePosition);
+  const removePosition = useStore((s) => s.removePosition);
+  const [draft, setDraft] = React.useState(() => position?.legs || []);
+  const [tickers, setTickers] = React.useState<Record<string, any>>({});
+  const [instruments, setInstruments] = React.useState<InstrumentInfo[]>([]);
+  const [optType, setOptType] = React.useState<OptionType>('P');
+  const [expiry, setExpiry] = React.useState<number | ''>('');
+  const [chain, setChain] = React.useState<InstrumentInfo[]>([]);
+  const [symbol, setSymbol] = React.useState<string>('');
+  const [side, setSide] = React.useState<'short'|'long'>('short');
+  const [qty, setQty] = React.useState<number>(1);
+  const [rollIdx, setRollIdx] = React.useState<number | ''>('');
+  const [rollExpiry, setRollExpiry] = React.useState<number | ''>('');
+  const [rollSymbol, setRollSymbol] = React.useState<string>('');
+
+  React.useEffect(() => { if (position) setDraft(position.legs); }, [position?.id]);
+
+  React.useEffect(() => {
+    let m = true;
+    fetchInstruments().then((list) => { if (!m) return; setInstruments(list.filter(i => i.deliveryTime > 0 && Number.isFinite(i.strike))); });
+    fetchOptionTickers().then((list) => { if (!m) return; setTickers(Object.fromEntries(list.map(t => [t.symbol, t]))); });
+    return () => { m = false; };
+  }, []);
+
+  React.useEffect(() => {
+    const mk = (exp: number | '', type: OptionType) => {
+      if (!exp) return [] as InstrumentInfo[];
+      return instruments.filter(i => i.deliveryTime === exp && i.optionType === type).sort((a,b)=>a.strike-b.strike);
+    };
+    setChain(mk(expiry, optType));
+  }, [instruments, expiry, optType]);
+
+  React.useEffect(() => {
+    const symbols = new Set<string>();
+    draft.forEach(l => symbols.add(l.leg.symbol));
+    chain.forEach(i => symbols.add(i.symbol));
+    const unsubs = Array.from(symbols).slice(0,300).map(sym => subscribeOptionTicker(sym, (t) => setTickers(prev => {
+      const cur = prev[t.symbol] || {};
+      const merged: any = { ...cur };
+      const keys: string[] = Object.keys(t as any);
+      for (const k of keys) {
+        const v: any = (t as any)[k];
+        if (v != null && !(Number.isNaN(v))) (merged as any)[k] = v;
+      }
+      return { ...prev, [t.symbol]: merged };
+    })));
+    return () => { unsubs.forEach(u => u()); };
+  }, [draft, chain]);
+
+  if (!position) return null;
+
+  const addLeg = () => {
+    const inst = chain.find(c => c.symbol === symbol);
+    if (!inst) return;
+    const leg: Leg = { symbol: inst.symbol, strike: inst.strike, optionType: inst.optionType, expiryMs: inst.deliveryTime };
+    const q = Math.max(0.1, Math.round(Number(qty) * 10) / 10);
+    const entryPrice = midPrice(tickers[leg.symbol]) ?? 0;
+    setDraft(d => [...d, { leg, side, qty: q, entryPrice }]);
+    setSymbol('');
+  };
+
+  const save = () => {
+    updatePosition(id, (p) => ({ ...p, legs: draft }));
+    onClose();
+  };
+
+  const removeLeg = (idx: number) => setDraft(d => d.filter((_, i) => i !== idx));
+  const setLegQty = (idx: number, q: number) => setDraft(d => d.map((L,i)=> i===idx ? { ...L, qty: Math.max(0.1, Math.round(q*10)/10) } : L));
+
+  const expiries = Array.from(new Set(instruments.filter(i => i.optionType === optType).map(i => i.deliveryTime))).sort((a,b)=>a-b);
+  const rollType = React.useMemo<OptionType | null>(() => {
+    if (rollIdx === '' || !draft[Number(rollIdx)]) return null;
+    return draft[Number(rollIdx)].leg.optionType;
+  }, [rollIdx, draft]);
+  const rollChain = React.useMemo(() => {
+    if (rollIdx === '' || !rollType || !rollExpiry) return [] as InstrumentInfo[];
+    return instruments.filter(i => i.optionType === rollType && i.deliveryTime === rollExpiry).sort((a,b)=>a.strike-b.strike);
+  }, [rollIdx, rollType, rollExpiry, instruments]);
+
+  return (
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.45)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:70}}>
+      <div style={{background:'var(--card)', color:'var(--fg)', border:'1px solid var(--border)', borderRadius:12, width:900, maxWidth:'95%', maxHeight:'90%', overflow:'auto'}}>
+        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 16px', borderBottom:'1px solid var(--border)'}}>
+          <strong>Edit Position</strong>
+          <div style={{display:'flex', gap:8}}>
+            <button className="ghost" onClick={save}>Save</button>
+            <button className="ghost" onClick={onClose}>Close</button>
+          </div>
+        </div>
+        <div style={{padding:12}}>
+          {/* Roll helper */}
+          <div style={{marginBottom: 12}}>
+            <div className="muted" style={{marginBottom:6}}>Roll helper</div>
+            <div className="grid" style={{gridTemplateColumns:'repeat(4, 1fr)', gap:8}}>
+              <label>
+                <div className="muted">Leg to roll</div>
+                <select value={rollIdx} onChange={(e)=>{ const v = e.target.value; setRollIdx(v===''? '': Number(v)); setRollExpiry(''); setRollSymbol(''); }}>
+                  <option value="">Select leg</option>
+                  {draft.map((L, idx)=>(
+                    <option key={idx} value={idx}>{L.side} {L.leg.optionType} {L.leg.strike} · {new Date(L.leg.expiryMs).toISOString().slice(0,10)} × {L.qty}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <div className="muted">Target expiry</div>
+                <select value={rollExpiry} onChange={(e)=>{ const v=e.target.value; setRollExpiry(v===''?'':Number(v)); setRollSymbol(''); }} disabled={rollIdx===''}>
+                  <option value="">Select expiry</option>
+                  {Array.from(new Set(instruments.filter(i=> i.optionType===rollType).map(i=>i.deliveryTime))).sort().map(ms=> (
+                    <option key={ms as number} value={ms as number}>{new Date(ms as number).toISOString().slice(0,10)}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <div className="muted">Target option</div>
+                <select value={rollSymbol} onChange={(e)=>setRollSymbol(e.target.value)} disabled={rollIdx==='' || !rollExpiry}>
+                  <option value="">Select strike</option>
+                  {rollChain.map(i=> {
+                    const t = tickers[i.symbol]||{}; const m = midPrice(t); const b=t?.bid1Price, a=t?.ask1Price;
+                    const label = `${i.strike} — ${m!=null? '$'+m.toFixed(2): (b!=null&&a!=null? `$${Number(b).toFixed(2)}/${Number(a).toFixed(2)}`:'—')}`;
+                    return <option key={i.symbol} value={i.symbol}>{label}</option>;
+                  })}
+                </select>
+              </label>
+              <div style={{display:'flex', alignItems:'end'}}>
+                <button className="ghost" disabled={rollIdx===''} onClick={()=>{
+                  if (rollIdx==='') return; const idx = Number(rollIdx); const src = draft[idx]; if (!src) return;
+                  // close leg
+                  const closeLeg = { ...src, side: (src.side==='short' ? 'long' as const : 'short' as const) };
+                  const entryClose = midPrice(tickers[closeLeg.leg.symbol]) ?? 0;
+                  // open new leg
+                  const inst = rollChain.find(c => c.symbol === rollSymbol);
+                  if (!inst) return;
+                  const openLeg = { leg: { symbol: inst.symbol, strike: inst.strike, optionType: inst.optionType, expiryMs: inst.deliveryTime }, side: src.side, qty: src.qty, entryPrice: midPrice(tickers[inst.symbol]) ?? 0 };
+                  setDraft(d => [...d, { ...closeLeg, entryPrice: entryClose }, openLeg]);
+                }}>Add roll</button>
+              </div>
+            </div>
+          </div>
+          <div className="muted" style={{marginBottom:6}}>Add leg</div>
+          <div className="grid" style={{gridTemplateColumns:'repeat(5, 1fr)', gap:8}}>
+            <label>
+              <div className="muted">Type</div>
+              <select value={optType} onChange={(e)=>{ setOptType(e.target.value as OptionType); setExpiry(''); setSymbol(''); }}>
+                <option value="P">PUT</option>
+                <option value="C">CALL</option>
+              </select>
+            </label>
+            <label>
+              <div className="muted">Expiry</div>
+              <select value={expiry} onChange={(e)=>{ const v=e.target.value; setExpiry(v===''?'':Number(v)); setSymbol(''); }}>
+                <option value="">Select expiry</option>
+                {expiries.map(ms => <option key={ms} value={ms}>{new Date(ms).toISOString().slice(0,10)}</option>)}
+              </select>
+            </label>
+            <label>
+              <div className="muted">Option</div>
+              <select value={symbol} onChange={(e)=>setSymbol(e.target.value)} disabled={!expiry}>
+                <option value="">Select strike</option>
+                {chain.map(i=>{
+                  const t = tickers[i.symbol]||{}; const m = midPrice(t); const b=t?.bid1Price, a=t?.ask1Price;
+                  const label = `${i.strike} — ${m!=null? '$'+m.toFixed(2): (b!=null&&a!=null? `$${Number(b).toFixed(2)}/${Number(a).toFixed(2)}`:'—')}`;
+                  return <option key={i.symbol} value={i.symbol}>{label}</option>;
+                })}
+              </select>
+            </label>
+            <label>
+              <div className="muted">Side</div>
+              <select value={side} onChange={(e)=>setSide(e.target.value as 'short'|'long')}>
+                <option value="short">short</option>
+                <option value="long">long</option>
+              </select>
+            </label>
+            <label>
+              <div className="muted">Qty</div>
+              <input type="number" min={0.1} step={0.1} value={qty} onChange={(e)=>setQty(Math.max(0.1, Number(e.target.value)||0.1))} />
+            </label>
+            <div style={{gridColumn:'1 / -1'}}>
+              <button className="ghost" onClick={addLeg} disabled={!symbol}>Add leg</button>
+            </div>
+          </div>
+
+          <div style={{marginTop:12}}>
+            <div className="muted">Legs</div>
+            {draft.length===0 ? <div className="muted">No legs</div> : (
+              <div style={{overflowX:'auto'}}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Type</th>
+                      <th>Expiry</th>
+                      <th>Strike</th>
+                      <th>Side</th>
+                      <th>Qty</th>
+                      <th>Entry</th>
+                      <th>Mid now</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {draft.map((L, idx)=>{
+                      const t = tickers[L.leg.symbol] || {}; const m = midPrice(t);
+                      return (
+                        <tr key={idx}>
+                          <td>{L.leg.optionType}</td>
+                          <td>{new Date(L.leg.expiryMs).toISOString().slice(0,10)}</td>
+                          <td>{L.leg.strike}</td>
+                          <td>{L.side}</td>
+                          <td>
+                            <input style={{width:90}} type="number" min={0.1} step={0.1} value={L.qty} onChange={(e)=>setLegQty(idx, Number(e.target.value)||L.qty)} />
+                          </td>
+                          <td>{L.entryPrice.toFixed(2)}</td>
+                          <td>{m!=null? m.toFixed(2): '—'}</td>
+                          <td><button className="ghost" onClick={()=>removeLeg(idx)}>Remove</button></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div style={{display:'flex', justifyContent:'space-between', marginTop:8}}>
+              <button className="ghost" style={{color:'#c62828'}} onClick={()=>{ removePosition(id); onClose(); }}>Delete position</button>
+              <div>
+                <button className="primary" onClick={save} disabled={!draft.length}>Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
