@@ -501,3 +501,47 @@ Below is a mapping so Codex/CLI knows where UI fields come from (public Bybit RE
 ### F) WS topics (optional later)
 - Public: `tickers.<SYMBOL>` per leg; update `bid1/ask1`, `delta/theta`, `underlyingPrice`.
 - Subscribe on row mount; unsubscribe on unmount.
+
+---
+
+## Change Log — 2025-09-12 (Session Addendum)
+
+This addendum captures UI/data changes done during the latest session so the build can be reproduced from scratch.
+
+- PositionView summary row (under chart)
+  - Grid widened to 10 columns to fit key metrics on one line.
+  - Reordered to group: Width, Net entry, Net mid, PnL ($) first; greeks next.
+
+- Chart overlay (live)
+  - Top-left overlay shows Spot (rounded, no decimals) and PnL ($, 2 decimals), updates live.
+  - Spot source: option indexPrice (underlying) from option tickers. A temporary switch to spot WS was reverted.
+
+- Per‑leg cards (View modal)
+  - Compact font (−1.5px); leg title and date enlarged (+2px).
+  - Two-row layout so all columns fit; Symbol spans both rows and wraps.
+  - Added per‑leg PnL ($) = sgn × (entry − mid) × qty (sgn: +1 short, −1 long).
+  - IV % with 1 decimal; priority chain:
+    1) markIv (WS);
+    2) implied from markPrice via BS inversion;
+    3) average of IV(bid) and IV(ask) via BS inversion;
+    4) implied from Mid;
+    5) HV30.
+  - Labels: `Δ (Delta)`, `Θ (Theta)`.
+
+- Under-chart metrics table
+  - Labels updated to `Δ (Delta)` and `Θ (Theta)`.
+
+- Removed in View modal
+  - Export SVG/PNG buttons removed.
+  - Screenshot button/functionality removed.
+
+- UnifiedPositionsTable
+  - Kept compact `Δ` header (long label reverted) to preserve layout.
+  - Liquidity badge (gray) next to `$maxSpread · OI min` with 4 grades:
+    - Compute per leg: spread% = (ask − bid)/mid × 100; aggregate max spread% across legs, min OI across legs.
+    - A: spread% < 1% and min OI ≥ 2000; B: spread% < 2% and min OI ≥ 1000; C: spread% < 3% and min OI ≥ 300; D: otherwise.
+
+- Help modal
+  - Documented badge rules, how spread%/OI are computed and aggregated across legs, and trading impact (slippage, execution, rolls).
+
+Primary files touched: `src/components/PositionView.tsx`, `src/components/UnifiedPositionsTable.tsx`, `src/components/HelpModal.tsx`.

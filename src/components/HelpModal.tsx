@@ -33,6 +33,19 @@ export function HelpModal({ onClose }: Props) {
             <li><strong>Net entry / Net mid / PnL</strong>: суммы по всем ногам с учетом знака стороны и <strong>qty</strong>.</li>
             <li><strong>Greeks (Δ/Γ/Vega/Θ)</strong>: суммирование по ногам; для коротких ног знак инвертируется.</li>
             <li><strong>Liquidity</strong>: максимальный bid‑ask спред по ногам и минимальный OI. Данные берутся из WS; если отсутствуют — подкачиваются из REST.</li>
+            <li><strong>Бэйджи ликвидности</strong> (все серые):
+              <div style={{marginTop:4}}>
+                <code style={{background:'var(--card)', padding:'1px 6px', borderRadius:8}}>A</code> / <code style={{background:'var(--card)', padding:'1px 6px', borderRadius:8}}>B</code> / <code style={{background:'var(--card)', padding:'1px 6px', borderRadius:8}}>C</code> / <code style={{background:'var(--card)', padding:'1px 6px', borderRadius:8}}>D</code>
+              </div>
+              <ul>
+                <li>A: <em>spread%</em> &lt; 1% и <em>min OI</em> ≥ 2000</li>
+                <li>B: <em>spread%</em> &lt; 2% и <em>min OI</em> ≥ 1000</li>
+                <li>C: <em>spread%</em> &lt; 3% и <em>min OI</em> ≥ 300</li>
+                <li>D: иначе</li>
+              </ul>
+              <div className="muted">Как считаем: для каждой ноги spread% = (Ask − Bid) / Mid × 100, затем берём <strong>максимум</strong> spread% по ногам и <strong>минимум</strong> OI. Меньше спред и выше OI — лучше. Низкая ликвидность повышает риск проскальзывания, сложнее исполнение лимитами и переносы (roll).</div>
+              <div className="muted" style={{marginTop:4}}>Для многоногих конструкций оценка считается по <strong>всем</strong> ногам: берём самое «узкое место» — наибольший spread% среди ног и наименьший OI. Если по части ног нет котировок (bid/ask или OI), бэйдж может понизиться из‑за неполных данных.</div>
+            </li>
             <li><strong>Vertical extras</strong>: для вертикалей показываются <em>Width</em>, <em>MaxLoss</em> (с учетом qty) и <em>DTE</em>.</li>
             <li><strong>Действия</strong>: View (для вертикалей, payoff‑график), Edit (для multi‑leg), Mark closed, Delete, Export CSV.</li>
           </ul>

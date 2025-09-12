@@ -187,10 +187,14 @@ export function UnifiedPositionsTable() {
     }, { delta: 0, gamma: 0, vega: 0, theta: 0 });
     const spreads = legs.map(L => L.spread).filter((v): v is number => v != null && Number.isFinite(v));
     const ois = legs.map(L => L.oi).filter((v): v is number => v != null && Number.isFinite(v));
+    const spreadPcts = legs
+      .map(L => (L.spread != null && Number.isFinite(L.spread) && L.mid > 0) ? (L.spread / L.mid) * 100 : undefined)
+      .filter((v): v is number => v != null && Number.isFinite(v));
     const liq = {
       maxSpread: spreads.length ? Math.max(...spreads) : undefined,
       minOI: ois.length ? Math.min(...ois) : undefined,
-    } as { maxSpread?: number; minOI?: number };
+      maxSpreadPct: spreadPcts.length ? Math.max(...spreadPcts) : undefined,
+    } as { maxSpread?: number; minOI?: number; maxSpreadPct?: number };
 
     // Vertical extras
     let width: number | undefined;
@@ -349,7 +353,24 @@ export function UnifiedPositionsTable() {
                     <td>{c.greeks.delta.toFixed(3)}</td>
                     <td>{c.greeks.vega.toFixed(3)}</td>
                     <td>{c.greeks.theta.toFixed(3)}</td>
-                    <td>{c.liq.maxSpread != null ? `$${c.liq.maxSpread.toFixed(2)}` : '—'} · OI {c.liq.minOI != null ? c.liq.minOI : '—'}</td>
+                    <td>
+                      {c.liq.maxSpread != null ? `$${c.liq.maxSpread.toFixed(2)}` : '—'} · OI {c.liq.minOI != null ? c.liq.minOI : '—'}
+                      {(() => {
+                        const sp = c.liq.maxSpreadPct;
+                        const oi = c.liq.minOI;
+                        let label: 'A' | 'B' | 'C' | 'D' = 'D';
+                        if (sp != null && isFinite(sp) && oi != null && isFinite(oi)) {
+                          if (sp < 1 && oi >= 2000) label = 'A';
+                          else if (sp < 2 && oi >= 1000) label = 'B';
+                          else if (sp < 3 && oi >= 300) label = 'C';
+                          else label = 'D';
+                        }
+                        const style: React.CSSProperties = { background: 'rgba(128,128,128,.18)', color: '#7a7a7a' };
+                        return (
+                          <span style={{...style, marginLeft: 8, padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)'}}>{label}</span>
+                        );
+                      })()}
+                    </td>
                     <td>
                       <button className="ghost" style={{fontSize: 18, lineHeight: 1}} title={r.favorite ? 'Unfavorite' : 'Favorite'} onClick={() => {
                         if (r.id.startsWith('S:')) toggleFavoriteSpread(r.id.slice(2));

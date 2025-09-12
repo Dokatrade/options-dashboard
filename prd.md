@@ -24,6 +24,28 @@ Single-page local web app to monitor and manage ETH options on Bybit. Supports P
 - Per‑position persistence (localStorage `position-view-ui-bypos-v1`): xZoom, yZoom, timePos, ivShift, rPct, showT0, showExpiry; keyed by stable leg signature. Global defaults remain in `position-view-ui-v1`.
 - Scrolling: modal uses `overflow:auto` at all times; wheel over SVG is intercepted; wheel zooms X, Shift+wheel zooms Y.
 
+## Recent Updates (2025-09-12 — Session Addendum)
+- PositionView summary grid widened to 10 columns; metrics reordered so Width, Net entry, Net mid, PnL ($) идут первыми; greeks после.
+- Chart overlay (в левом верхнем углу графика): Spot без десятичных и PnL ($) — обновляются в реальном времени; источник Spot — option indexPrice (underlying) из опционных тикеров.
+- Пер‑leg карточки в View:
+  - Уменьшен базовый шрифт (−1.5px), увеличены название ноги и дата (+2px).
+  - Двухрядная раскладка; колонка Symbol занимает оба ряда (gridRow span 2), остальное распределено по двум строкам.
+  - Добавлен столбец PnL ($) по каждой ноге: sgn × (entry − mid) × qty, где sgn=+1 для short, −1 для long.
+  - IV %: формат 1 знак после запятой; порядок источников:
+    1) markIv (WS);
+    2) инверсия BS из markPrice ("fair price");
+    3) среднее IV из Bid/Ask (инверсия BS по каждой и усреднение);
+    4) IV из Mid; 5) HV30.
+  - Подписи греков: Δ (Delta), Θ (Theta).
+- Под таблицей графика: греческие метрики подписаны как Δ (Delta) и Θ (Theta).
+- Удалены из View: кнопки Export SVG/PNG и экспериментальная кнопка Screenshot (и код захвата).
+- UnifiedPositionsTable: 
+  - Оставлен компактный заголовок Δ (без словаря) для сохранения ширины.
+  - Добавлен серый бейдж ликвидности рядом с "$maxSpread · OI min":
+    - Расчёт: по каждой ноге spread% = (Ask − Bid)/Mid × 100; агрегируем max spread% по ногам и min OI по ногам.
+    - Правила: A (spread% < 1% и min OI ≥ 2000), B (< 2% и ≥ 1000), C (< 3% и ≥ 300), D (иначе).
+- Справка: добавлен раздел про бэйджи ликвидности, методику расчёта (максимум spread% и минимум OI по ногам) и влияние на торговлю (проскальзывание, исполнение, роллы).
+
 ## 2) Goals
 - Unified dashboard for verticals and multi-leg positions.
 - Decide quickly: hold / take profit / roll / close.
