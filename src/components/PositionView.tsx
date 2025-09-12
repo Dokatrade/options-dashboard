@@ -612,7 +612,7 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
 
           {/* Zoom controls removed by request; default X zoom set to 0.5 */}
 
-          <div className="grid" style={{gridTemplateColumns:'repeat(6, minmax(90px, max-content))', gap:3, marginBottom: 6, fontSize:'calc(1em - 2px)'}}>
+          <div className="grid" style={{gridTemplateColumns:'repeat(10, minmax(90px, max-content))', gap:3, marginBottom: 6, fontSize:'calc(1em - 2px)'}}>
             {/* Core meta */}
             <div><div className="muted">Created</div><div>{new Date(createdAt).toISOString().slice(0,10)}</div></div>
             <div><div className="muted">DTE</div><div>{calc.dteLabel}</div></div>
