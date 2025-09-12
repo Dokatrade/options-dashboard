@@ -613,11 +613,10 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
           {/* Zoom controls removed by request; default X zoom set to 0.5 */}
 
           <div className="grid" style={{gridTemplateColumns:'repeat(6, minmax(90px, max-content))', gap:3, marginBottom: 6, fontSize:'calc(1em - 2px)'}}>
+            {/* Core meta */}
             <div><div className="muted">Created</div><div>{new Date(createdAt).toISOString().slice(0,10)}</div></div>
             <div><div className="muted">DTE</div><div>{calc.dteLabel}</div></div>
-            <div><div className="muted">Δ</div><div>{calc.greeks.delta.toFixed(3)}</div></div>
-            <div><div className="muted">Vega</div><div>{calc.greeks.vega.toFixed(3)}</div></div>
-            <div><div className="muted">Θ</div><div>{calc.greeks.theta.toFixed(3)}</div></div>
+            {/* Width (if available) */}
             {(() => {
               const exps = Array.from(new Set(legs.map(L => Number(L.leg.expiryMs) || 0)));
               if (exps.length === 1) {
@@ -636,9 +635,14 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
               }
               return null;
             })()}
+            {/* Net figures moved up to align with Width */}
             <div><div className="muted">Net entry</div><div>{calc.netEntry.toFixed(2)}</div></div>
             <div><div className="muted">Net mid</div><div>{calc.netMid.toFixed(2)}</div></div>
             <div><div className="muted">PnL ($)</div><div>{calc.pnl.toFixed(2)}</div></div>
+            {/* Greeks after net figures */}
+            <div><div className="muted">Δ</div><div>{calc.greeks.delta.toFixed(3)}</div></div>
+            <div><div className="muted">Vega</div><div>{calc.greeks.vega.toFixed(3)}</div></div>
+            <div><div className="muted">Θ</div><div>{calc.greeks.theta.toFixed(3)}</div></div>
             {note && <div style={{gridColumn:'1 / -1'}}><div className="muted">Note</div><div>{note}</div></div>}
           </div>
 
