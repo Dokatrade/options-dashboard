@@ -648,10 +648,10 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
 
           <div className="grid" style={{gap: 6}}>
             {calc.det.map((x) => (
-              <div key={x.L.leg.symbol} style={{border: '1px solid var(--border)', borderRadius: 8, padding: 6, fontSize: 'calc(1em - 1.5px)'}}>
+              <div key={x.L.leg.symbol} style={{border: '1px solid var(--border)', borderRadius: 8, padding: 6, fontSize: 'calc(1em - 3px)'}}>
                 <div style={{display:'flex', justifyContent:'space-between', marginBottom: 2}}>
-                  <div><strong>{x.L.side}</strong> {x.L.leg.optionType} {x.L.leg.strike} × {x.L.qty}</div>
-                  <div className="muted">{new Date(x.L.leg.expiryMs).toISOString().slice(0,10)}</div>
+                  <div style={{fontSize:'calc(1em + 2px)'}}><strong>{x.L.side}</strong> {x.L.leg.optionType} {x.L.leg.strike} × {x.L.qty}</div>
+                  <div className="muted" style={{fontSize:'calc(1em + 2px)'}}>{new Date(x.L.leg.expiryMs).toISOString().slice(0,10)}</div>
                 </div>
                 <div className="grid" style={{gridTemplateColumns:'2fr repeat(8, minmax(0,1fr))', gap: 6}}>
                   <div style={{paddingRight:12}}>
@@ -671,37 +671,7 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
             ))}
           </div>
 
-          {/* Export buttons */}
-          <div style={{display:'flex', gap:8, marginTop:8}}>
-            <button className="ghost" onClick={() => {
-              const svg = svgRef.current; if (!svg) return;
-              const ser = new XMLSerializer();
-              const src = ser.serializeToString(svg);
-              const blob = new Blob([src], { type: 'image/svg+xml;charset=utf-8' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a'); a.href = url; a.download = 'position-chart.svg'; a.click();
-              setTimeout(()=>URL.revokeObjectURL(url), 500);
-            }}>Export SVG</button>
-            <button className="ghost" onClick={() => {
-              const svg = svgRef.current; if (!svg) return;
-              const ser = new XMLSerializer(); const src = ser.serializeToString(svg);
-              const img = new Image(); const url = URL.createObjectURL(new Blob([src], { type: 'image/svg+xml;charset=utf-8' }));
-              img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const vb = svg.viewBox.baseVal; canvas.width = vb.width; canvas.height = vb.height;
-                const ctx = canvas.getContext('2d'); if (!ctx) return;
-                ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,canvas.width,canvas.height);
-                ctx.drawImage(img, 0, 0);
-                canvas.toBlob((blob) => {
-                  if (!blob) return; const u = URL.createObjectURL(blob);
-                  const a = document.createElement('a'); a.href = u; a.download = 'position-chart.png'; a.click();
-                  setTimeout(()=>URL.revokeObjectURL(u), 500);
-                  URL.revokeObjectURL(url);
-                });
-              };
-              img.src = url;
-            }}>Export PNG</button>
-          </div>
+          {/* Export buttons removed */}
         </div>
       </div>
     </div>
