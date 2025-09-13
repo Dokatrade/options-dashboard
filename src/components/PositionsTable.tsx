@@ -45,7 +45,7 @@ export function PositionsTable() {
           </thead>
           <tbody>
             {positions.map((p) => {
-              const legs = p.legs.map((l) => {
+              const legs = p.legs.filter(l => !l.hidden).map((l) => {
                 const t = tickers[l.leg.symbol];
                 const m = midPrice(t) ?? 0;
                 const delta = t?.delta != null ? Number(t.delta) : 0;
@@ -70,8 +70,8 @@ export function PositionsTable() {
                   <td>{pnl.toFixed(2)}</td>
                   <td>{dSum.toFixed(3)}</td>
                   <td>
-                    <button className="ghost" onClick={() => closePosition(p.id)}>Mark closed</button>
-                    <button className="ghost" onClick={() => removePosition(p.id)}>Delete</button>
+                    <button className="ghost" onClick={() => { if (window.confirm('Mark this position as closed?')) closePosition(p.id); }}>Mark closed</button>
+                    <button className="ghost" onClick={() => { if (window.confirm('Delete this position? This cannot be undone.')) removePosition(p.id); }}>Delete</button>
                   </td>
                 </tr>
               );

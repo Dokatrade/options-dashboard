@@ -10,20 +10,48 @@ async function getJson<T>(url: string): Promise<T> {
 
 // Instruments metadata for ETH options
 export async function fetchInstruments(): Promise<InstrumentInfo[]> {
-  type R = { retCode: number; retMsg: string; result?: { list: any[] } };
-  const data = await getJson<R>(`${API}/v5/market/instruments-info?category=option&baseCoin=ETH`);
-  const list = data?.result?.list ?? [];
-  return list.map((it: any) => {
+  type R = { retCode: number; retMsg: string; result?: { list: any[]; nextPageCursor?: string } };
+  const collected: any[] = [];
+  try {
+    let cursor: string | undefined = undefined;
+    let guard = 0;
+    do {
+      const url = new URL(`${API}/v5/market/instruments-info`);
+      url.searchParams.set('category', 'option');
+      url.searchParams.set('baseCoin', 'ETH');
+      url.searchParams.set('limit', '1000');
+      if (cursor) url.searchParams.set('cursor', cursor);
+      const data = await getJson<R>(url.toString());
+      const list = data?.result?.list ?? [];
+      collected.push(...list);
+      const next = data?.result?.nextPageCursor;
+      if (!next || next === cursor) break;
+      cursor = next;
+    } while (++guard < 10);
+    // Fallback to single call if pagination yielded nothing
+    if (!collected.length) {
+      const single = await getJson<R>(`${API}/v5/market/instruments-info?category=option&baseCoin=ETH`);
+      collected.push(...(single?.result?.list ?? []));
+    }
+  } catch {
+    // Hard fallback: non-paginated call
+    try {
+      const single = await getJson<R>(`${API}/v5/market/instruments-info?category=option&baseCoin=ETH`);
+      collected.push(...(single?.result?.list ?? []));
+    } catch {}
+  }
+
+  return collected.map((it: any) => {
     const symbol: string = it.symbol;
-    const parts = symbol.split('-');
+    const parts = String(symbol || '').split('-');
     const strikeParsed = Number(parts?.[2]);
     const optRaw = (parts?.[3] || it?.optionsType || it?.optionType || '').toString().toUpperCase();
     const optionType = optRaw.startsWith('P') ? 'P' : 'C';
     return {
       symbol,
-      strike: isFinite(strikeParsed) ? strikeParsed : NaN,
+      strike: Number.isFinite(strikeParsed) ? strikeParsed : NaN,
       optionType,
-      deliveryTime: Number(it?.deliveryTime || it?.deliveryDate || 0),
+      deliveryTime: Number(it?.deliveryTime ?? it?.deliveryDate ?? 0),
       status: it?.status
     } as InstrumentInfo;
   });

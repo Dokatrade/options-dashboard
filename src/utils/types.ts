@@ -56,6 +56,7 @@ export interface PositionLeg {
   side: PositionSide;
   qty: number; // contracts
   entryPrice: number; // price per contract at save time
+  hidden?: boolean; // when true, excluded from all calcs/visuals until unhidden
 }
 
 export interface Position {

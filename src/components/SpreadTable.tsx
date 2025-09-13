@@ -51,6 +51,8 @@ export function SpreadTable() {
   const spreads = useStore((s) => s.spreads.filter((p) => !p.closedAt));
   const markClosed = useStore((s) => s.markClosed);
   const remove = useStore((s) => s.remove);
+  const addPosition = useStore((s) => s.addPosition);
+  const updatePosition = useStore((s) => s.updatePosition);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
   const [loading, setLoading] = React.useState(false);
   const [err, setErr] = React.useState<string | null>(null);
@@ -132,10 +134,16 @@ export function SpreadTable() {
                     <td>{c.deltaShort != null ? c.deltaShort.toFixed(3) : '—'}</td>
                     <td><span className={`status ${c.status.color}`} title={c.status.reason}>{c.status.color === 'green' ? '🟢' : c.status.color === 'yellow' ? '🟡' : '🔴'}</span></td>
                     <td>
-                      <button className="ghost" title={expanded[p.id] ? 'Hide legs' : 'Show legs'} onClick={() => setExpanded((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}>{expanded[p.id] ? '▴' : '▾'}</button>
-                      <button className="ghost" onClick={() => setViewId(p.id)}>View</button>
-                      <button className="ghost" onClick={() => markClosed(p.id)}>Mark closed</button>
-                      <button className="ghost" onClick={() => remove(p.id)}>Delete</button>
+                      <div style={{display:'flex', flexDirection:'column', gap:4}}>
+                        <div style={{display:'flex', alignItems:'center', gap:6}}>
+                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 6px', fontSize: 28}} title={expanded[p.id] ? 'Hide legs' : 'Show legs'} onClick={() => setExpanded((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}>{expanded[p.id] ? '▴' : '▾'}</button>
+                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => setViewId(p.id)}>View</button>
+                        </div>
+                        <div style={{display:'flex', alignItems:'center', gap:6}}>
+                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Mark this spread as closed?')) markClosed(p.id); }}>Mark closed</button>
+                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Delete this spread? This cannot be undone.')) remove(p.id); }}>Delete</button>
+                        </div>
+                      </div>
                     </td>
                   </tr>
                   {expanded[p.id] && (
@@ -155,7 +163,28 @@ export function SpreadTable() {
                             return (
                               <div key={leg.symbol} style={{border: '1px solid var(--border)', borderRadius: 8, padding: 6, fontSize: 'calc(1em - 1.5px)'}}>
                                 <div style={{display:'flex', justifyContent:'space-between', marginBottom: 2}}>
-                                  <div><strong>{side}</strong> {leg.optionType} {leg.strike}</div>
+                                  <div style={{display:'flex', alignItems:'center', gap:8}}>
+                                    <button type="button" className="ghost" style={{height:22, lineHeight:'22px', padding:'0 8px', cursor:'pointer'}} onClick={(e)=>{
+                                      e.stopPropagation();
+                                      try {
+                                        const qty = p.qty ?? 1;
+                                        const entryShort = p.entryShort != null ? p.entryShort : (p.entryLong != null ? p.cEnter + p.entryLong : p.cEnter);
+                                        const entryLong = p.entryLong != null ? p.entryLong : (p.entryShort != null ? p.entryShort - p.cEnter : 0);
+                                        const legs = [
+                                          { leg: p.short, side: 'short' as const, qty, entryPrice: entryShort },
+                                          { leg: p.long,  side: 'long'  as const, qty, entryPrice: entryLong },
+                                        ];
+                                        addPosition({ legs, note: p.note });
+                                        const latest = useStore.getState().positions?.[0]?.id;
+                                        remove(p.id);
+                                        if (latest) updatePosition(latest, (pos) => ({
+                                          ...pos,
+                                          legs: pos.legs.map(LL => LL.leg.symbol === leg.symbol ? { ...LL, hidden: true } : LL)
+                                        }));
+                                      } catch {}
+                                    }}>Hide</button>
+                                    <div><strong>{side}</strong> {leg.optionType} {leg.strike}</div>
+                                  </div>
                                   <div className="muted">{new Date(leg.expiryMs).toISOString().slice(0,10)}</div>
                                 </div>
                                 <div className="grid" style={{gridTemplateColumns:'2fr repeat(6, minmax(0,1fr))', gap: 6}}>
@@ -199,7 +228,27 @@ export function SpreadTable() {
           { leg: pos.long,  side: 'long'  as const, qty, entryPrice: entryLong },
         ];
         const title = `Vertical ${pos.short.optionType} ${pos.short.strike}/${pos.long.strike}`;
-        return <PositionView legs={legs} createdAt={pos.createdAt} note={pos.note} title={title} onClose={() => setViewId(null)} />;
+        return (
+          <PositionView
+            legs={legs}
+            createdAt={pos.createdAt}
+            note={pos.note}
+            title={title}
+            onClose={() => setViewId(null)}
+            onToggleLegHidden={(sym) => {
+              try {
+                addPosition({ legs, note: pos.note });
+                const latest = useStore.getState().positions?.[0]?.id;
+                remove(pos.id);
+                if (latest) updatePosition(latest, (p) => ({
+                  ...p,
+                  legs: p.legs.map(L => L.leg.symbol === sym ? { ...L, hidden: true } : L)
+                }));
+              } catch {}
+              setViewId(null);
+            }}
+          />
+        );
       })()}
     </div>
   );

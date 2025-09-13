@@ -10,9 +10,15 @@ type Props = {
   note?: string;
   title?: string;
   onClose: () => void;
+  onToggleLegHidden?: (symbol: string) => void;
+  hiddenSymbols?: string[];
 };
 
-export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
+export function PositionView({ legs, createdAt, note, title, onClose, onToggleLegHidden, hiddenSymbols }: Props) {
+  const legsCalc = React.useMemo(() => {
+    const hiddenSet = new Set(hiddenSymbols || []);
+    return legs.filter(L => !hiddenSet.has(L.leg.symbol));
+  }, [legs, hiddenSymbols]);
   // Lock initial X-domain to ±50% around current spot (if available) to prevent re-centering
   const baseDomainRef = React.useRef<{ minX: number; maxX: number } | null>(null);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
@@ -28,6 +34,10 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
   const [graphHover, setGraphHover] = React.useState(false);
   const [xZoom, setXZoom] = React.useState(1); // default: show exactly ±50% around spot at open
   const [yZoom, setYZoom] = React.useState(1);
+  // Draggable modal position
+  const [pos, setPos] = React.useState<{ x: number; y: number } | null>(null);
+  const draggingRef = React.useRef<{ startX: number; startY: number; startPos: { x: number; y: number } } | null>(null);
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
   // Per-position key for persisting view settings (mouse-positioned zoom, etc.)
   const viewKey = React.useMemo(() => {
     const parts = legs
@@ -91,23 +101,23 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
 
   // Minimum allowed time position based on days already passed (createdAt → latest expiry)
   const minTimePos = React.useMemo(() => {
-    const expiries = legs.map(L => Number(L.leg.expiryMs)).filter(Boolean);
+    const expiries = legsCalc.map(L => Number(L.leg.expiryMs)).filter(Boolean);
     if (!expiries.length) return 0;
     const latest = Math.max(...expiries);
     const start = Math.min(createdAt || Date.now(), latest);
     const total = Math.max(1, latest - start);
     const elapsed = Math.max(0, Math.min(Date.now() - start, total));
     return Math.max(0, Math.min(1, elapsed / total));
-  }, [legs, createdAt, clock]);
+  }, [legsCalc, createdAt, clock]);
 
   // Zero-DTE flag (calendar day of expiry): snap slider to the end
   const isZeroDTE = React.useMemo(() => {
-    const expiries = legs.map(L => Number(L.leg.expiryMs)).filter(Boolean);
+    const expiries = legsCalc.map(L => Number(L.leg.expiryMs)).filter(Boolean);
     if (!expiries.length) return false;
     const latest = Math.max(...expiries);
     const dteDays = Math.floor((latest - Date.now()) / 86_400_000);
     return dteDays <= 0;
-  }, [legs, clock]);
+  }, [legsCalc, clock]);
 
   // Effective time position used in calculations
   const effTimePos = isZeroDTE ? 1 : Math.max(minTimePos, Math.max(0, Math.min(1, timePos)));
@@ -116,7 +126,7 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
     const symbols = Array.from(new Set(legs.map(l => l.leg.symbol)));
     const unsubs = symbols.slice(0, 300).map(sym => subscribeOptionTicker(sym, (t) => setTickers(prev => ({ ...prev, [t.symbol]: { ...(prev[t.symbol] || {}), ...t } }))));
     return () => { unsubs.forEach(u => u()); };
-  }, [legs]);
+  }, [legsCalc]);
 
   // Ensure wheel inside SVG never scrolls page (native listener, passive: false)
   React.useEffect(() => {
@@ -152,11 +162,42 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
     fetchHV30().then(v => { if (m) setHv30(v); }).catch(()=>{});
     return () => { m = false; };
   }, []);
+  // Initialize modal position (center horizontally; slight offset from top)
+  React.useLayoutEffect(() => {
+    if (pos != null) return;
+    const el = containerRef.current;
+    const w = el?.offsetWidth ?? 900;
+    const h = el?.offsetHeight ?? 600;
+    const x = Math.max(0, Math.round((window.innerWidth - w) / 2));
+    const y = Math.max(12, Math.round((window.innerHeight - h) / 5));
+    setPos({ x, y });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [containerRef.current]);
+  // Drag handlers bound to window so we can drag smoothly
+  React.useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const d = draggingRef.current; if (!d) return;
+      const el = containerRef.current;
+      const boundsW = window.innerWidth;
+      const boundsH = window.innerHeight;
+      const w = el?.offsetWidth ?? 600;
+      const h = el?.offsetHeight ?? 400;
+      const dx = e.clientX - d.startX;
+      const dy = e.clientY - d.startY;
+      const nx = Math.min(Math.max(0, d.startPos.x + dx), Math.max(0, boundsW - w));
+      const ny = Math.min(Math.max(0, d.startPos.y + dy), Math.max(0, boundsH - h));
+      setPos({ x: nx, y: ny });
+    };
+    const onUp = () => { draggingRef.current = null; document.body.style.cursor = ''; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, []);
   // Spot price comes from option index price (per-leg underlying)
 
 
   const calc = React.useMemo(() => {
-    const det = legs.map((L) => {
+    const det = legsCalc.map((L) => {
       const t = tickers[L.leg.symbol] || {};
       const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
       const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
@@ -177,11 +218,11 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
       vega: a.vega + (x.v ?? 0) * x.L.qty,
       theta: a.theta + (x.th ?? 0) * x.L.qty,
     }), { delta: 0, vega: 0, theta: 0 });
-    const dtes = Array.from(new Set(legs.map(L => L.leg.expiryMs))).map(ms => Math.max(0, Math.round((ms - Date.now()) / 86400000)));
+    const dtes = Array.from(new Set(legsCalc.map(L => L.leg.expiryMs))).map(ms => Math.max(0, Math.round((ms - Date.now()) / 86400000)));
     const dteLabel = dtes.length ? (dtes.length === 1 ? `${dtes[0]}d` : `${Math.min(...dtes)}–${Math.max(...dtes)}d`) : '—';
     // Spot proxy from any leg's indexPrice
     const spot = (() => {
-      for (const L of legs) {
+      for (const L of legsCalc) {
         const t = tickers[L.leg.symbol];
         if (t?.indexPrice != null) return Number(t.indexPrice);
       }
@@ -190,9 +231,53 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
     return { det, netEntry, netMid, pnl, greeks, dteLabel, spot };
   }, [legs, tickers]);
 
+  // Expiry PnL extrema (max profit/loss). Uses expiry payoff across S in {0, strikes, large S} with unbounded detection on S→∞.
+  const extrema = React.useMemo(() => {
+    const strikes = legsCalc.map(l => Number(l.leg.strike) || 0).filter(s => isFinite(s));
+    const Ks = Array.from(new Set(strikes)).sort((a,b)=>a-b);
+    const netEntry = calc.netEntry;
+    const pnlAt = (S: number) => {
+      let signedVal = 0;
+      for (const L of legsCalc) {
+        const K = Number(L.leg.strike) || 0; const q = Number(L.qty) || 1; const sign = L.side === 'short' ? 1 : -1;
+        const intrinsic = L.leg.optionType === 'C' ? Math.max(0, S - K) : Math.max(0, K - S);
+        signedVal += sign * intrinsic * q;
+      }
+      return netEntry - signedVal;
+    };
+    const S0 = 0;
+    const Sbig = (Ks.length ? Ks[Ks.length - 1] : 1000) * 5 + 1;
+    const candidates = [S0, ...Ks, Sbig];
+    let minV = Infinity, maxV = -Infinity;
+    for (const S of candidates) {
+      const v = pnlAt(S);
+      if (isFinite(v)) { if (v < minV) minV = v; if (v > maxV) maxV = v; }
+    }
+    // Unbounded check to the right: slope as S→∞ depends only on calls
+    const slopeRight = (() => {
+      let s = 0;
+      for (const L of legsCalc) {
+        if (L.leg.optionType !== 'C') continue;
+        const sign = L.side === 'short' ? 1 : -1;
+        s += sign * (Number(L.qty) || 1);
+      }
+      // PnL = netEntry - s*S + ... when S > max K for calls
+      return -s;
+    })();
+    // If slope > 0 as S→∞, PnL grows without bound (unbounded profit); if slope < 0, PnL falls without bound (unbounded loss)
+    const unboundedProfit = slopeRight > 0;
+    const unboundedLoss = slopeRight < 0;
+    return {
+      maxProfit: maxV,
+      maxLoss: minV,
+      unboundedProfit,
+      unboundedLoss,
+    };
+  }, [legsCalc, calc.netEntry]);
+
   // Expiry payoff chart (PnL vs S)
   const payoff = React.useMemo(() => {
-    const strikes = legs.map(l => l.leg.strike);
+    const strikes = legsCalc.map(l => l.leg.strike);
     const Kmin = Math.min(...strikes);
     const Kmax = Math.max(...strikes);
     if (!baseDomainRef.current) {
@@ -224,7 +309,7 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
     const netEntry = calc.netEntry;
     const valueAt = (S: number) => {
       let signedVal = 0;
-      for (const L of legs) {
+      for (const L of legsCalc) {
         const K = L.leg.strike;
         const qty = Number(L.qty) || 1;
         const sign = L.side === 'short' ? 1 : -1;
@@ -241,13 +326,13 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
     const expVals = xs.map(S => valueAt(S));
     // Compute T+0 raw values separately; Y-scaling will prioritize expiry structure for clarity
     const tNow = Date.now();
-    const latestMs = Math.max(...legs.map(L => Number(L.leg.expiryMs)));
+    const latestMs = Math.max(...legsCalc.map(L => Number(L.leg.expiryMs)));
     // Anchor so that model equals actual PnL at current spot
     let anchorOffset = 0;
     if (latestMs > 0 && tNow < latestMs && calc.spot != null && isFinite(calc.spot)) {
       const S0 = Number(calc.spot);
       let v0 = 0;
-      for (const L of legs) {
+      for (const L of legsCalc) {
         const t = tickers[L.leg.symbol] || {};
         const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
         const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
@@ -264,7 +349,7 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
     const dteDays0 = Math.floor((latestMs - tNow) / 86_400_000);
     const nowVals = (latestMs > 0 && dteDays0 > 0) ? xs.map(S => {
       let valNow = 0;
-      for (const L of legs) {
+      for (const L of legsCalc) {
         const t = tickers[L.leg.symbol] || {};
         const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
         const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
@@ -386,9 +471,27 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
   // Screenshot functionality removed per request
 
   return (
-    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.45)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:70}}>
-      <div style={{background:'var(--card)', color:'var(--fg)', border:'1px solid var(--border)', borderRadius:12, width:900, maxWidth:'95%', maxHeight:'90%', overflow:'auto', overscrollBehavior:'contain'}}>
-        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 16px', borderBottom:'1px solid var(--border)'}}>
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.45)', zIndex:70}}>
+      <div
+        ref={containerRef}
+        style={{
+          position:'absolute',
+          left: Math.max(0, pos?.x ?? 0),
+          top: Math.max(0, pos?.y ?? 0),
+          background:'var(--card)', color:'var(--fg)', border:'1px solid var(--border)', borderRadius:12,
+          width:900, maxWidth:'95%', maxHeight:'90%', overflow:'auto', overscrollBehavior:'contain', boxShadow:'0 10px 24px rgba(0,0,0,.35)'
+        }}
+      >
+        <div
+          style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 16px', borderBottom:'1px solid var(--border)', cursor:'move', userSelect: draggingRef.current ? 'none' as const : undefined}}
+          onMouseDown={(e) => {
+            if (!pos) return;
+            const target = e.target as HTMLElement;
+            if (target && target.closest('button, input, select, textarea, a')) return;
+            draggingRef.current = { startX: e.clientX, startY: e.clientY, startPos: { ...pos } };
+            document.body.style.cursor = 'grabbing';
+          }}
+        >
           <strong>{title || 'Position View'}</strong>
           <div style={{display:'flex', gap:8}}>
             <button className="ghost" onClick={onClose}>Close</button>
@@ -429,7 +532,7 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
                 style={{width:220}}
               />
               <span className="muted">{(() => {
-                const expiries = legs.map(L => Number(L.leg.expiryMs)).filter(Boolean);
+                const expiries = legsCalc.map(L => Number(L.leg.expiryMs)).filter(Boolean);
                 if (!expiries.length) return 'DTE: —';
                 const tNow = Date.now();
                 const latest = Math.max(...expiries);
@@ -452,7 +555,7 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
                  // Compute PnL at expiry and today
                  const pnlExpiry = (()=>{
                    let signedVal = 0; const netEntry = calc.netEntry;
-                   for (const L of legs) {
+                   for (const L of legsCalc) {
                      const K = Number(L.leg.strike) || 0; const q = Number(L.qty) || 1; const sign = L.side === 'short' ? 1 : -1;
                      const intrinsic = L.leg.optionType === 'C' ? Math.max(0, S - K) : Math.max(0, K - S);
                      signedVal += sign * intrinsic * q;
@@ -460,10 +563,10 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
                    return netEntry - signedVal;
                  })();
                  const pnlNow = (()=>{
-                   const latestMs = Math.max(...legs.map(L => Number(L.leg.expiryMs)));
+                   const latestMs = Math.max(...legsCalc.map(L => Number(L.leg.expiryMs)));
                    if (!(latestMs > 0) || Date.now() >= latestMs) return undefined;
                    let valNow = 0; const tNow = Date.now();
-                   for (const L of legs) {
+                   for (const L of legsCalc) {
                      const t = tickers[L.leg.symbol] || {};
                      const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
                      const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
@@ -479,7 +582,7 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
                    if (calc.spot != null && isFinite(calc.spot)) {
                      const S0 = Number(calc.spot);
                      let v0 = 0; const tNow2 = Date.now();
-                     for (const L of legs) {
+                     for (const L of legsCalc) {
                        const t = tickers[L.leg.symbol] || {};
                        const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
                        const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
@@ -527,15 +630,20 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
               const dy = 16;
               const spotStr = (calc.spot != null && isFinite(calc.spot)) ? `$${Number(calc.spot).toFixed(0)}` : '—';
               const pnlStr = isFinite(calc.pnl) ? `$${calc.pnl.toFixed(2)}` : '—';
+              const maxProfitStr = extrema.unboundedProfit ? '∞' : (isFinite(extrema.maxProfit) ? `$${Math.max(0, extrema.maxProfit).toFixed(2)}` : '—');
+              const maxLossStr = extrema.unboundedLoss ? '∞' : (isFinite(extrema.maxLoss) ? `$${Math.max(0, -extrema.maxLoss).toFixed(2)}` : '—');
+              const gap = 6; // extra spacing between PnL and Max Profit
               return (
                 <g>
                   <text x={x} y={y} fontSize="12" fill="var(--fg)">Index: {spotStr}</text>
                   <text x={x} y={y + dy} fontSize="12" fill="var(--fg)">PnL: {pnlStr}</text>
+                  <text x={x} y={y + dy*2 + gap} fontSize="12" fill="var(--fg)">Max Profit: {maxProfitStr}</text>
+                  <text x={x} y={y + dy*3 + gap} fontSize="12" fill="var(--fg)">Max Loss: {maxLossStr}</text>
                 </g>
               );
             })()}
             {/* Strike markers */}
-            {Array.from(new Set(legs.map(l => Number(l.leg.strike) || 0))).map((K, i) => (
+            {Array.from(new Set(legsCalc.map(l => Number(l.leg.strike) || 0))).map((K, i) => (
               <line key={i} x1={payoff.xScale(K)} y1={payoff.y0} x2={payoff.xScale(K)} y2={payoff.y1} stroke="#9aa0a6" strokeDasharray="3 3" />
             ))}
             {/* Per-leg markers at top to reflect option legs */}
@@ -636,9 +744,9 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
             <div><div className="muted">DTE</div><div>{calc.dteLabel}</div></div>
             {/* Width (if available) */}
             {(() => {
-              const exps = Array.from(new Set(legs.map(L => Number(L.leg.expiryMs) || 0)));
+              const exps = Array.from(new Set(legsCalc.map(L => Number(L.leg.expiryMs) || 0)));
               if (exps.length === 1) {
-                const Ks = Array.from(new Set(legs.map(L => Number(L.leg.strike) || 0))).sort((a,b)=>a-b);
+                const Ks = Array.from(new Set(legsCalc.map(L => Number(L.leg.strike) || 0))).sort((a,b)=>a-b);
                 if (Ks.length === 2) {
                   const w = Ks[1] - Ks[0];
                   return <div><div className="muted">Width</div><div>{w.toFixed(2)}</div></div>;
@@ -665,11 +773,18 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
           </div>
 
           <div className="grid" style={{gap: 6}}>
-            {calc.det.map((x) => (
-              <div key={x.L.leg.symbol} style={{border: '1px solid var(--border)', borderRadius: 8, padding: 6, fontSize: 'calc(1em - 3px)'}}>
+            {legs.map((L) => { const t = tickers[L.leg.symbol] || {}; const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined; const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined; const mid = midPrice(t); const iv = t?.markIv != null ? Number(t.markIv) : undefined; const dRaw = t?.delta != null ? Number(t.delta) : undefined; const vRaw = t?.vega != null ? Number(t.vega) : undefined; const thRaw = t?.theta != null ? Number(t.theta) : undefined; const sgn = L.side === 'long' ? 1 : -1; const x = { L, bid, ask, mid, iv, d: dRaw != null ? sgn * dRaw : undefined, v: vRaw != null ? sgn * vRaw : undefined, th: thRaw != null ? sgn * thRaw : undefined, oi: t?.openInterest != null ? Number(t.openInterest) : undefined }; const isHidden = (hiddenSymbols || []).includes(L.leg.symbol); return (
+              <div key={L.leg.symbol} style={{border: '1px solid var(--border)', borderRadius: 8, padding: 6, fontSize: 'calc(1em - 3px)', ...(isHidden ? { background: 'rgba(128,128,128,.12)' } : {})}}>
                 <div style={{display:'flex', justifyContent:'space-between', marginBottom: 2}}>
-                  <div style={{fontSize:'calc(1em + 2px)'}}><strong>{x.L.side}</strong> {x.L.leg.optionType} {x.L.leg.strike} × {x.L.qty}</div>
-                  <div className="muted" style={{fontSize:'calc(1em + 2px)'}}>{new Date(x.L.leg.expiryMs).toISOString().slice(0,10)}</div>
+                  <div style={{display:'flex', alignItems:'center', gap:8}}>
+                    {onToggleLegHidden && (
+                      <button type="button" className="ghost" style={{height: 22, lineHeight: '22px', padding: '0 8px', cursor:'pointer', position:'relative', zIndex:2}} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleLegHidden?.(L.leg.symbol); }}>
+                        {isHidden ? 'Unhide' : 'Hide'}
+                      </button>
+                    )}
+                    <div style={{fontSize:'calc(1em + 2px)'}}><strong>{L.side}</strong> {L.leg.optionType} {L.leg.strike} × {L.qty}</div>
+                  </div>
+                  <div className="muted" style={{fontSize:'calc(1em + 2px)'}}>{new Date(L.leg.expiryMs).toISOString().slice(0,10)}</div>
                 </div>
                 {/* Grid 6x4; first column: row 1 label, rows 2-4 merged value centered */}
                 <div className="grid" style={{gridTemplateColumns:'2fr repeat(5, minmax(0,1fr))', gridTemplateRows:'repeat(4, auto)', gap: 6}}>
@@ -677,7 +792,7 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
                   <div style={{gridColumn:1, gridRow:1}} className="muted">Symbol</div>
                   {/* First column value spans rows 2-4 and is vertically centered */}
                   <div style={{gridColumn:1, gridRow:'2 / span 3', paddingRight:12, display:'flex', alignItems:'center'}}>
-                    <div title={x.L.leg.symbol} style={{whiteSpace:'normal', overflowWrap:'anywhere', wordBreak:'break-word', fontSize:'1em'}}>{x.L.leg.symbol}</div>
+                    <div title={L.leg.symbol} style={{whiteSpace:'normal', overflowWrap:'anywhere', wordBreak:'break-word', fontSize:'1em'}}>{L.leg.symbol}</div>
                   </div>
                   {/* Row 1: titles (left to right) */}
                   <div style={{gridColumn:2, gridRow:1}} className="muted">Bid / Ask</div>
@@ -692,36 +807,36 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
                   <div style={{gridColumn:5, gridRow:3}} className="muted">OI (Ctrs)</div>
                   <div style={{gridColumn:6, gridRow:3}} className="muted">Δσ (Vol)</div>
                   {/* Row 2: values for first line */}
-                  <div style={{gridColumn:2, gridRow:2}}>{x.bid != null ? x.bid.toFixed(2) : '—'} / {x.ask != null ? x.ask.toFixed(2) : '—'}</div>
-                  <div style={{gridColumn:3, gridRow:2}}>{x.mid != null ? x.mid.toFixed(2) : '—'}</div>
-                  <div style={{gridColumn:4, gridRow:2}}>{isFinite(x.L.entryPrice) ? `$${x.L.entryPrice.toFixed(2)}` : '—'}</div>
-                  <div style={{gridColumn:5, gridRow:2}}>{(() => { const sgn = x.L.side === 'short' ? 1 : -1; const entry = Number(x.L.entryPrice); const mid = x.mid; const qty = Number(x.L.qty) || 1; const pnl = (isFinite(entry) && mid != null && isFinite(mid)) ? sgn * (entry - mid) * qty : undefined; return pnl != null ? pnl.toFixed(2) : '—'; })()}</div>
+                  <div style={{gridColumn:2, gridRow:2}}>{bid != null ? bid.toFixed(2) : '—'} / {ask != null ? ask.toFixed(2) : '—'}</div>
+                  <div style={{gridColumn:3, gridRow:2}}>{mid != null ? mid.toFixed(2) : '—'}</div>
+                  <div style={{gridColumn:4, gridRow:2}}>{isFinite(L.entryPrice) ? `$${L.entryPrice.toFixed(2)}` : '—'}</div>
+                  <div style={{gridColumn:5, gridRow:2}}>{(() => { const sgn2 = L.side === 'short' ? 1 : -1; const entry = Number(L.entryPrice); const m = mid; const qty = Number(L.qty) || 1; const pnl = (isFinite(entry) && m != null && isFinite(m)) ? sgn2 * (entry - m) * qty : undefined; return pnl != null ? pnl.toFixed(2) : '—'; })()}</div>
                   <div style={{gridColumn:6, gridRow:2}}>{(() => {
-                    const t = tickers[x.L.leg.symbol] || {};
-                    const markIv = t?.markIv != null ? Number(t.markIv) : (x.iv != null ? Number(x.iv) : undefined);
+                    const t = tickers[L.leg.symbol] || {};
+                    const markIv = t?.markIv != null ? Number(t.markIv) : (iv != null ? Number(iv) : undefined);
                     if (markIv != null && isFinite(markIv)) return markIv.toFixed(1);
                     const S = t?.indexPrice != null ? Number(t.indexPrice) : (calc.spot != null ? Number(calc.spot) : undefined);
-                    const K = Number(x.L.leg.strike) || 0;
-                    const T = Math.max(0, (Number(x.L.leg.expiryMs) - Date.now()) / (365 * 24 * 60 * 60 * 1000));
+                    const K = Number(L.leg.strike) || 0;
+                    const T = Math.max(0, (Number(L.leg.expiryMs) - Date.now()) / (365 * 24 * 60 * 60 * 1000));
                     const markPrice = t?.markPrice != null ? Number(t.markPrice) : undefined;
                     if (S != null && isFinite(S) && K > 0 && T > 0 && markPrice != null && isFinite(markPrice) && markPrice >= 0) {
-                      const iv = bsImpliedVol(x.L.leg.optionType, S, K, T, markPrice, rPct / 100);
+                      const iv = bsImpliedVol(L.leg.optionType, S, K, T, markPrice, rPct / 100);
                       if (iv != null && isFinite(iv)) return (iv * 100).toFixed(1);
                     }
                     let ivFromBook: number | undefined;
                     if (S != null && isFinite(S) && K > 0 && T > 0) {
                       const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
                       const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
-                      const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
-                      const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
+                      const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
+                      const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
                       if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) ivFromBook = 0.5 * (ivBid + ivAsk);
                       else if (ivBid != null && isFinite(ivBid)) ivFromBook = ivBid;
                       else if (ivAsk != null && isFinite(ivAsk)) ivFromBook = ivAsk;
                     }
                     if (ivFromBook != null && isFinite(ivFromBook)) return (ivFromBook * 100).toFixed(1);
-                    const mid = x.mid != null ? Number(x.mid) : undefined;
-                    if (S != null && isFinite(S) && K > 0 && T > 0 && mid != null && isFinite(mid) && mid >= 0) {
-                      const iv = bsImpliedVol(x.L.leg.optionType, S, K, T, mid, rPct / 100);
+                    const mid2 = mid != null ? Number(mid) : undefined;
+                    if (S != null && isFinite(S) && K > 0 && T > 0 && mid2 != null && isFinite(mid2) && mid2 >= 0) {
+                      const iv = bsImpliedVol(L.leg.optionType, S, K, T, mid2, rPct / 100);
                       if (iv != null && isFinite(iv)) return (iv * 100).toFixed(1);
                     }
                     const v = hv30;
@@ -733,23 +848,23 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
                   <div style={{gridColumn:4, gridRow:4}}>{x.th != null ? x.th.toFixed(3) : '—'}</div>
                   <div style={{gridColumn:5, gridRow:4}}>{x.oi != null ? x.oi : '—'}</div>
                   <div style={{gridColumn:6, gridRow:4}}>{(() => {
-                    const t = tickers[x.L.leg.symbol] || {};
+                    const t = tickers[L.leg.symbol] || {};
                     const S = t?.indexPrice != null ? Number(t.indexPrice) : (calc.spot != null ? Number(calc.spot) : undefined);
-                    const K = Number(x.L.leg.strike) || 0;
-                    const T = Math.max(0, (Number(x.L.leg.expiryMs) - Date.now()) / (365 * 24 * 60 * 60 * 1000));
+                    const K = Number(L.leg.strike) || 0;
+                    const T = Math.max(0, (Number(L.leg.expiryMs) - Date.now()) / (365 * 24 * 60 * 60 * 1000));
                     if (!(S != null && isFinite(S) && K > 0 && T > 0)) return '—';
-                    const mid = x.mid != null ? Number(x.mid) : undefined;
-                    const ivMid = (mid != null && isFinite(mid) && mid >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, mid, rPct / 100) : undefined;
+                    const mid3 = mid != null ? Number(mid) : undefined;
+                    const ivMid = (mid3 != null && isFinite(mid3) && mid3 >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, mid3, rPct / 100) : undefined;
                     const markIvPct = t?.markIv != null ? Number(t.markIv) : undefined;
                     const sigmaFromMarkIv = (markIvPct != null && isFinite(markIvPct)) ? (markIvPct / 100) : undefined;
                     const markPrice = t?.markPrice != null ? Number(t.markPrice) : undefined;
-                    const sigmaFromMarkPrice = (markPrice != null && isFinite(markPrice) && markPrice >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, markPrice, rPct / 100) : undefined;
+                    const sigmaFromMarkPrice = (markPrice != null && isFinite(markPrice) && markPrice >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, markPrice, rPct / 100) : undefined;
                     let sigmaFromBook: number | undefined;
                     {
                       const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
                       const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
-                      const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
-                      const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
+                      const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
+                      const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
                       if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) sigmaFromBook = 0.5 * (ivBid + ivAsk);
                       else if (ivBid != null && isFinite(ivBid)) sigmaFromBook = ivBid;
                       else if (ivAsk != null && isFinite(ivAsk)) sigmaFromBook = ivAsk;
@@ -763,7 +878,7 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
                   })()}</div>
                 </div>
               </div>
-            ))}
+            ); })}
           </div>
 
           {/* Export buttons removed */}

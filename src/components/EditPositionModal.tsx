@@ -75,6 +75,7 @@ export function EditPositionModal({ id, onClose }: Props) {
   };
 
   const removeLeg = (idx: number) => setDraft(d => d.filter((_, i) => i !== idx));
+  const toggleHide = (idx: number) => setDraft(d => d.map((L, i) => i === idx ? { ...L, hidden: !L.hidden } : L));
   const setLegQty = (idx: number, q: number) => setDraft(d => d.map((L,i)=> i===idx ? { ...L, qty: Math.max(0.1, Math.round(q*10)/10) } : L));
 
   const expiries = Array.from(new Set(instruments.filter(i => i.optionType === optType).map(i => i.deliveryTime))).sort((a,b)=>a-b);
@@ -210,7 +211,7 @@ export function EditPositionModal({ id, onClose }: Props) {
                     {draft.map((L, idx)=>{
                       const t = tickers[L.leg.symbol] || {}; const m = midPrice(t);
                       return (
-                        <tr key={idx}>
+                        <tr key={idx} style={L.hidden ? { background: 'rgba(128,128,128,.12)' } : undefined}>
                           <td>{L.leg.optionType}</td>
                           <td>{new Date(L.leg.expiryMs).toISOString().slice(0,10)}</td>
                           <td>{L.leg.strike}</td>
@@ -220,7 +221,10 @@ export function EditPositionModal({ id, onClose }: Props) {
                           </td>
                           <td>{L.entryPrice.toFixed(2)}</td>
                           <td>{m!=null? m.toFixed(2): '—'}</td>
-                          <td><button className="ghost" onClick={()=>removeLeg(idx)}>Remove</button></td>
+                          <td>
+                            <button type="button" className="ghost" onClick={(e)=>{ e.stopPropagation(); toggleHide(idx); }} style={{marginRight:6, cursor:'pointer'}}>{L.hidden ? 'Unhide' : 'Hide'}</button>
+                            <button type="button" className="ghost" onClick={(e)=>{ e.stopPropagation(); removeLeg(idx); }} style={{cursor:'pointer'}}>Remove</button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -229,7 +233,7 @@ export function EditPositionModal({ id, onClose }: Props) {
               </div>
             )}
             <div style={{display:'flex', justifyContent:'space-between', marginTop:8}}>
-              <button className="ghost" style={{color:'#c62828'}} onClick={()=>{ removePosition(id); onClose(); }}>Delete position</button>
+              <button className="ghost" style={{color:'#c62828'}} onClick={()=>{ if (window.confirm('Delete this position? This cannot be undone.')) { removePosition(id); onClose(); } }}>Delete position</button>
               <div>
                 <button className="primary" onClick={save} disabled={!draft.length}>Save</button>
               </div>

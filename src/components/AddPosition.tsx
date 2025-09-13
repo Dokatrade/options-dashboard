@@ -30,6 +30,7 @@ export function AddPosition() {
   const [deltaMax, setDeltaMax] = React.useState<number>(0.30);
   const [minOI, setMinOI] = React.useState<number>(0);
   const [maxSpread, setMaxSpread] = React.useState<number>(9999);
+  const [showAllStrikes, setShowAllStrikes] = React.useState<boolean>(false);
 
   React.useEffect(() => {
     let mounted = true;
@@ -45,14 +46,43 @@ export function AddPosition() {
   }, []);
 
   React.useEffect(() => {
+    const monthCodes = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+    const expiryCode = (ms: number): string => {
+      const d = new Date(ms);
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      const m = monthCodes[d.getUTCMonth()];
+      const yy = String(d.getUTCFullYear() % 100).padStart(2, '0');
+      return `${dd}${m}${yy}`;
+    };
     const mk = (exp: number | '', type: OptionType) => {
       if (!exp) return [] as InstrumentInfo[];
-      return instruments
+      const base = instruments
         .filter((i) => i.deliveryTime === exp && i.optionType === type)
         .sort((a, b) => a.strike - b.strike);
+      // Union with tickers-derived symbols for this expiry if any are missing (Bybit occasionally skips items in instruments-info)
+      try {
+        const code = expiryCode(exp as number);
+        const wantSuffix = `-${type}`;
+        const seen = new Set(base.map(i => i.symbol));
+        const extras: InstrumentInfo[] = [];
+        Object.keys(tickers || {}).forEach(sym => {
+          if (!sym.includes(`-${code}-`)) return;
+          if (!sym.endsWith(wantSuffix)) return;
+          if (seen.has(sym)) return;
+          const parts = sym.split('-');
+          const strike = Number(parts?.[2]);
+          if (!Number.isFinite(strike)) return;
+          extras.push({ symbol: sym, strike, optionType: type, deliveryTime: exp as number });
+        });
+        if (extras.length) {
+          const merged = [...base, ...extras].sort((a,b)=>a.strike - b.strike);
+          return merged;
+        }
+      } catch {}
+      return base;
     };
     setChain(mk(expiry, optType));
-  }, [expiry, instruments, optType]);
+  }, [expiry, instruments, optType, tickers]);
 
   React.useEffect(() => {
     let m = true;
@@ -74,6 +104,7 @@ export function AddPosition() {
       if (typeof d?.deltaMax === 'number') setDeltaMax(d.deltaMax);
       if (typeof d?.minOI === 'number') setMinOI(d.minOI);
       if (typeof d?.maxSpread === 'number') setMaxSpread(d.maxSpread);
+      if (typeof d?.showAllStrikes === 'boolean') setShowAllStrikes(d.showAllStrikes);
       if (Array.isArray(d?.draft)) {
         const legs = d.draft.map((L: any) => ({
           leg: {
@@ -95,7 +126,7 @@ export function AddPosition() {
     const id = setTimeout(() => {
       const payload = {
         optType, expiry, strike, qty,
-        deltaMin, deltaMax, minOI, maxSpread,
+        deltaMin, deltaMax, minOI, maxSpread, showAllStrikes,
         draft,
       };
       try { localStorage.setItem('options-draft-v1', JSON.stringify(payload)); } catch {}
@@ -123,6 +154,7 @@ export function AddPosition() {
 
   const expiries = Array.from(new Set(instruments.filter(i => i.optionType === optType).map(i => i.deliveryTime))).sort((a, b) => a - b);
   const filteredChain = React.useMemo(() => {
+    if (showAllStrikes) return chain;
     return chain.filter((i) => {
       const t = tickers[i.symbol] || {};
       const d = t?.delta != null ? Math.abs(Number(t.delta)) : undefined;
@@ -134,7 +166,7 @@ export function AddPosition() {
       const spOk = spr == null ? true : (spr <= maxSpread);
       return dOk && oiOk && spOk;
     });
-  }, [chain, tickers, deltaMin, deltaMax, minOI, maxSpread]);
+  }, [chain, tickers, deltaMin, deltaMax, minOI, maxSpread, showAllStrikes]);
 
   const addLeg = (side: 'short' | 'long') => {
     const inst = chain.find(c => c.symbol === strike);
@@ -232,6 +264,10 @@ export function AddPosition() {
           <div className="muted">Max spread ($)</div>
           <input type="number" min={0} step={0.01} value={maxSpread} onChange={(e) => setMaxSpread(Number(e.target.value)||0)} />
         </label>
+        <label style={{display:'flex', alignItems:'end', gap:6}}>
+          <input type="checkbox" checked={showAllStrikes} onChange={(e)=> setShowAllStrikes(e.target.checked)} />
+          <span className="muted">Show all strikes</span>
+        </label>
         <label>
           <div className="muted">Expiry</div>
           <select value={expiry} onChange={(e) => { const v = e.target.value; setExpiry(v === '' ? '' : Number(v)); setStrike(''); }}>
@@ -247,7 +283,8 @@ export function AddPosition() {
             <option value="">Select strike</option>
             {filteredChain.map((i) => {
               const t = tickers[i.symbol];
-              const b = t?.bid1Price, a = t?.ask1Price; const m = midPrice(t);
+              const b = t?.bid1Price, a = t?.ask1Price;
+              const m = (b != null && a != null) ? (Number(b) + Number(a)) / 2 : undefined; // strict mid from book
               const d = t?.delta != null ? Math.abs(Number(t.delta)) : undefined;
               const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
               const label = Number.isFinite(i.strike)
