@@ -414,7 +414,7 @@ export function UnifiedPositionsTable() {
                                   </div>
                                   <div style={{paddingRight:8}}><div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, whiteSpace:'nowrap', fontWeight:600}}>Bid / Ask</div><div>{bid != null ? bid.toFixed(2) : '—'} / {ask != null ? ask.toFixed(2) : '—'}</div></div>
                                   <div style={{marginLeft:8}}><div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, fontWeight:600}}>Mid</div><div>{mid != null ? mid.toFixed(2) : '—'}</div></div>
-                                  <div style={{paddingRight:8}}><div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, whiteSpace:'nowrap', fontWeight:600}}>Entry @</div><div>{isFinite(L.entryPrice) ? `$${L.entryPrice.toFixed(2)}` : '—'}</div></div>
+                                  <div style={{paddingRight:8}}><div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, whiteSpace:'nowrap', fontWeight:600}}>Entry</div><div>{isFinite(L.entryPrice) ? `$${L.entryPrice.toFixed(2)}` : '—'}</div></div>
                                   <div style={{marginLeft:8}}><div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, fontWeight:600}}>IV %</div><div>{iv != null ? iv.toFixed(1) : '—'}</div></div>
                                   <div><div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, fontWeight:600}}>Δ</div><div>{d != null ? d.toFixed(3) : '—'}</div></div>
                                   <div><div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, fontWeight:600}}>Vega</div><div>{v != null ? v.toFixed(3) : '—'}</div></div>

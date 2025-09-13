@@ -529,7 +529,7 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
               const pnlStr = isFinite(calc.pnl) ? `$${calc.pnl.toFixed(2)}` : '—';
               return (
                 <g>
-                  <text x={x} y={y} fontSize="12" fill="var(--fg)">Spot: {spotStr}</text>
+                  <text x={x} y={y} fontSize="12" fill="var(--fg)">Index: {spotStr}</text>
                   <text x={x} y={y + dy} fontSize="12" fill="var(--fg)">PnL: {pnlStr}</text>
                 </g>
               );
@@ -588,7 +588,7 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
                     const sign = (isFinite(calc.pnl) && calc.pnl > 0) ? '-' : '';
                     const shown = `${sign}${diffPct.toFixed(2)}%`;
                     const tx = p.x - 6;
-                    const ty = payoff.y0 + (payoff.y1 - payoff.y0) * 0.72; // 28% above bottom
+                    const ty = payoff.y0 + (payoff.y1 - payoff.y0) * 0.70; // moved 2% higher (from 28% to 30% above bottom)
                     return (
                       <text x={tx} y={ty} fontSize="10" fontWeight="bold" fill="#c6c6c6" textAnchor="middle" transform={`rotate(-90 ${tx}, ${ty})`} style={{ letterSpacing: '0.8px' }}>
                         <tspan>Breakeven Point</tspan>
@@ -671,85 +671,96 @@ export function PositionView({ legs, createdAt, note, title, onClose }: Props) {
                   <div style={{fontSize:'calc(1em + 2px)'}}><strong>{x.L.side}</strong> {x.L.leg.optionType} {x.L.leg.strike} × {x.L.qty}</div>
                   <div className="muted" style={{fontSize:'calc(1em + 2px)'}}>{new Date(x.L.leg.expiryMs).toISOString().slice(0,10)}</div>
                 </div>
-                {/* Two-row grid with Symbol spanning both rows */}
-                <div className="grid" style={{gridTemplateColumns:'2fr repeat(5, minmax(0,1fr))', gap: 6}}>
-                  {/* Symbol spans 2 rows */}
-                  <div style={{paddingRight:12, gridRow:'1 / span 2'}}>
-                    <div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, fontWeight:600}}>Symbol</div>
-                    <div title={x.L.leg.symbol} style={{whiteSpace:'normal', overflowWrap:'anywhere', wordBreak:'break-word'}}>{x.L.leg.symbol}</div>
+                {/* Grid 6x4; first column: row 1 label, rows 2-4 merged value centered */}
+                <div className="grid" style={{gridTemplateColumns:'2fr repeat(5, minmax(0,1fr))', gridTemplateRows:'repeat(4, auto)', gap: 6}}>
+                  {/* First column header (row 1) */}
+                  <div style={{gridColumn:1, gridRow:1}} className="muted">Symbol</div>
+                  {/* First column value spans rows 2-4 and is vertically centered */}
+                  <div style={{gridColumn:1, gridRow:'2 / span 3', paddingRight:12, display:'flex', alignItems:'center'}}>
+                    <div title={x.L.leg.symbol} style={{whiteSpace:'normal', overflowWrap:'anywhere', wordBreak:'break-word', fontSize:'1em'}}>{x.L.leg.symbol}</div>
                   </div>
-                  {/* Row 1 cells */}
-                  <div style={{paddingRight:8}}>
-                    <div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, whiteSpace:'nowrap', fontWeight:600}}>Bid / Ask</div>
-                    <div>{x.bid != null ? x.bid.toFixed(2) : '—'} / {x.ask != null ? x.ask.toFixed(2) : '—'}</div>
-                  </div>
-                  <div style={{marginLeft:8}}>
-                    <div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, fontWeight:600}}>Mid</div>
-                    <div>{x.mid != null ? x.mid.toFixed(2) : '—'}</div>
-                  </div>
-                  <div style={{paddingRight:8}}>
-                    <div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, whiteSpace:'nowrap', fontWeight:600}}>Entry @</div>
-                    <div>{isFinite(x.L.entryPrice) ? `$${x.L.entryPrice.toFixed(2)}` : '—'}</div>
-                  </div>
-                  {(() => { const sgn = x.L.side === 'short' ? 1 : -1; const entry = Number(x.L.entryPrice); const mid = x.mid; const qty = Number(x.L.qty) || 1; const pnl = (isFinite(entry) && mid != null && isFinite(mid)) ? sgn * (entry - mid) * qty : undefined; return (
-                    <div style={{marginLeft:8}}>
-                      <div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, fontWeight:600}}>PnL ($)</div>
-                      <div>{pnl != null ? pnl.toFixed(2) : '—'}</div>
-                    </div>
-                  ); })()}
-                  <div>
-                    <div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, fontWeight:600}}>IV %</div>
-                    <div>{(() => {
-                      // Prefer Bybit markIv (matches UI). Fallbacks: implied from markPrice, then order book average IV, then Mid IV, then HV30
-                      const t = tickers[x.L.leg.symbol] || {};
-                      const markIv = t?.markIv != null ? Number(t.markIv) : (x.iv != null ? Number(x.iv) : undefined);
-                      if (markIv != null && isFinite(markIv)) return markIv.toFixed(1);
-                      const S = t?.indexPrice != null ? Number(t.indexPrice) : (calc.spot != null ? Number(calc.spot) : undefined);
-                      const K = Number(x.L.leg.strike) || 0;
-                      const T = Math.max(0, (Number(x.L.leg.expiryMs) - Date.now()) / (365 * 24 * 60 * 60 * 1000));
-                      // Try fair price (markPrice) first — this is what Bybit displays near IV
-                      const markPrice = t?.markPrice != null ? Number(t.markPrice) : undefined;
-                      if (S != null && isFinite(S) && K > 0 && T > 0 && markPrice != null && isFinite(markPrice) && markPrice >= 0) {
-                        const iv = bsImpliedVol(x.L.leg.optionType, S, K, T, markPrice, rPct / 100);
-                        if (iv != null && isFinite(iv)) return (iv * 100).toFixed(1);
-                      }
-                      let ivFromBook: number | undefined;
-                      if (S != null && isFinite(S) && K > 0 && T > 0) {
-                        const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
-                        const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
-                        const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
-                        const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
-                        if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) ivFromBook = 0.5 * (ivBid + ivAsk);
-                        else if (ivBid != null && isFinite(ivBid)) ivFromBook = ivBid;
-                        else if (ivAsk != null && isFinite(ivAsk)) ivFromBook = ivAsk;
-                      }
-                      if (ivFromBook != null && isFinite(ivFromBook)) return (ivFromBook * 100).toFixed(1);
-                      const mid = x.mid != null ? Number(x.mid) : undefined;
-                      if (S != null && isFinite(S) && K > 0 && T > 0 && mid != null && isFinite(mid) && mid >= 0) {
-                        const iv = bsImpliedVol(x.L.leg.optionType, S, K, T, mid, rPct / 100);
-                        if (iv != null && isFinite(iv)) return (iv * 100).toFixed(1);
-                      }
-                      const v = hv30;
-                      return v != null && isFinite(v) ? Number(v).toFixed(1) : '—';
-                    })()}</div>
-                  </div>
-                  {/* Row 2 cells */}
-                  <div>
-                    <div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, fontWeight:600}}>Δ (Delta)</div>
-                    <div>{x.d != null ? x.d.toFixed(3) : '—'}</div>
-                  </div>
-                  <div>
-                    <div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, fontWeight:600}}>Vega</div>
-                    <div>{x.v != null ? x.v.toFixed(3) : '—'}</div>
-                  </div>
-                  <div>
-                    <div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, fontWeight:600}}>Θ (Theta)</div>
-                    <div>{x.th != null ? x.th.toFixed(3) : '—'}</div>
-                  </div>
-                  <div>
-                    <div className="muted" style={{fontSize:'calc(1em - 1px)', lineHeight:1.1, fontWeight:600}}>OI</div>
-                    <div>{x.oi != null ? x.oi : '—'}</div>
-                  </div>
+                  {/* Row 1: titles (left to right) */}
+                  <div style={{gridColumn:2, gridRow:1}} className="muted">Bid / Ask</div>
+                  <div style={{gridColumn:3, gridRow:1}} className="muted">Mid</div>
+                  <div style={{gridColumn:4, gridRow:1}} className="muted">Entry</div>
+                  <div style={{gridColumn:5, gridRow:1}} className="muted">PnL ($)</div>
+                  <div style={{gridColumn:6, gridRow:1}} className="muted">IV %</div>
+                  {/* Row 3: titles second line */}
+                  <div style={{gridColumn:2, gridRow:3}} className="muted">Vega</div>
+                  <div style={{gridColumn:3, gridRow:3}} className="muted">Δ (Delta)</div>
+                  <div style={{gridColumn:4, gridRow:3}} className="muted">Θ (Theta)</div>
+                  <div style={{gridColumn:5, gridRow:3}} className="muted">OI (Ctrs)</div>
+                  <div style={{gridColumn:6, gridRow:3}} className="muted">Δσ (Vol)</div>
+                  {/* Row 2: values for first line */}
+                  <div style={{gridColumn:2, gridRow:2}}>{x.bid != null ? x.bid.toFixed(2) : '—'} / {x.ask != null ? x.ask.toFixed(2) : '—'}</div>
+                  <div style={{gridColumn:3, gridRow:2}}>{x.mid != null ? x.mid.toFixed(2) : '—'}</div>
+                  <div style={{gridColumn:4, gridRow:2}}>{isFinite(x.L.entryPrice) ? `$${x.L.entryPrice.toFixed(2)}` : '—'}</div>
+                  <div style={{gridColumn:5, gridRow:2}}>{(() => { const sgn = x.L.side === 'short' ? 1 : -1; const entry = Number(x.L.entryPrice); const mid = x.mid; const qty = Number(x.L.qty) || 1; const pnl = (isFinite(entry) && mid != null && isFinite(mid)) ? sgn * (entry - mid) * qty : undefined; return pnl != null ? pnl.toFixed(2) : '—'; })()}</div>
+                  <div style={{gridColumn:6, gridRow:2}}>{(() => {
+                    const t = tickers[x.L.leg.symbol] || {};
+                    const markIv = t?.markIv != null ? Number(t.markIv) : (x.iv != null ? Number(x.iv) : undefined);
+                    if (markIv != null && isFinite(markIv)) return markIv.toFixed(1);
+                    const S = t?.indexPrice != null ? Number(t.indexPrice) : (calc.spot != null ? Number(calc.spot) : undefined);
+                    const K = Number(x.L.leg.strike) || 0;
+                    const T = Math.max(0, (Number(x.L.leg.expiryMs) - Date.now()) / (365 * 24 * 60 * 60 * 1000));
+                    const markPrice = t?.markPrice != null ? Number(t.markPrice) : undefined;
+                    if (S != null && isFinite(S) && K > 0 && T > 0 && markPrice != null && isFinite(markPrice) && markPrice >= 0) {
+                      const iv = bsImpliedVol(x.L.leg.optionType, S, K, T, markPrice, rPct / 100);
+                      if (iv != null && isFinite(iv)) return (iv * 100).toFixed(1);
+                    }
+                    let ivFromBook: number | undefined;
+                    if (S != null && isFinite(S) && K > 0 && T > 0) {
+                      const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
+                      const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
+                      const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
+                      const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
+                      if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) ivFromBook = 0.5 * (ivBid + ivAsk);
+                      else if (ivBid != null && isFinite(ivBid)) ivFromBook = ivBid;
+                      else if (ivAsk != null && isFinite(ivAsk)) ivFromBook = ivAsk;
+                    }
+                    if (ivFromBook != null && isFinite(ivFromBook)) return (ivFromBook * 100).toFixed(1);
+                    const mid = x.mid != null ? Number(x.mid) : undefined;
+                    if (S != null && isFinite(S) && K > 0 && T > 0 && mid != null && isFinite(mid) && mid >= 0) {
+                      const iv = bsImpliedVol(x.L.leg.optionType, S, K, T, mid, rPct / 100);
+                      if (iv != null && isFinite(iv)) return (iv * 100).toFixed(1);
+                    }
+                    const v = hv30;
+                    return v != null && isFinite(v) ? Number(v).toFixed(1) : '—';
+                  })()}</div>
+                  {/* Row 4: values for second line */}
+                  <div style={{gridColumn:2, gridRow:4}}>{x.v != null ? x.v.toFixed(3) : '—'}</div>
+                  <div style={{gridColumn:3, gridRow:4}}>{x.d != null ? x.d.toFixed(3) : '—'}</div>
+                  <div style={{gridColumn:4, gridRow:4}}>{x.th != null ? x.th.toFixed(3) : '—'}</div>
+                  <div style={{gridColumn:5, gridRow:4}}>{x.oi != null ? x.oi : '—'}</div>
+                  <div style={{gridColumn:6, gridRow:4}}>{(() => {
+                    const t = tickers[x.L.leg.symbol] || {};
+                    const S = t?.indexPrice != null ? Number(t.indexPrice) : (calc.spot != null ? Number(calc.spot) : undefined);
+                    const K = Number(x.L.leg.strike) || 0;
+                    const T = Math.max(0, (Number(x.L.leg.expiryMs) - Date.now()) / (365 * 24 * 60 * 60 * 1000));
+                    if (!(S != null && isFinite(S) && K > 0 && T > 0)) return '—';
+                    const mid = x.mid != null ? Number(x.mid) : undefined;
+                    const ivMid = (mid != null && isFinite(mid) && mid >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, mid, rPct / 100) : undefined;
+                    const markIvPct = t?.markIv != null ? Number(t.markIv) : undefined;
+                    const sigmaFromMarkIv = (markIvPct != null && isFinite(markIvPct)) ? (markIvPct / 100) : undefined;
+                    const markPrice = t?.markPrice != null ? Number(t.markPrice) : undefined;
+                    const sigmaFromMarkPrice = (markPrice != null && isFinite(markPrice) && markPrice >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, markPrice, rPct / 100) : undefined;
+                    let sigmaFromBook: number | undefined;
+                    {
+                      const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
+                      const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
+                      const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
+                      const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(x.L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
+                      if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) sigmaFromBook = 0.5 * (ivBid + ivAsk);
+                      else if (ivBid != null && isFinite(ivBid)) sigmaFromBook = ivBid;
+                      else if (ivAsk != null && isFinite(ivAsk)) sigmaFromBook = ivAsk;
+                    }
+                    const sigmaFromHV = (hv30 != null && isFinite(hv30)) ? (Number(hv30) / 100) : undefined;
+                    const sigmaRef = sigmaFromMarkIv ?? sigmaFromMarkPrice ?? sigmaFromBook ?? sigmaFromHV;
+                    if (!(ivMid != null && isFinite(ivMid) && sigmaRef != null && isFinite(sigmaRef))) return '—';
+                    const dSigmaPp = (ivMid - sigmaRef) * 100;
+                    const badge = dSigmaPp >= 1 ? '↑' : (dSigmaPp <= -1 ? '↓' : '–');
+                    return `${dSigmaPp.toFixed(1)} [${badge}]`;
+                  })()}</div>
                 </div>
               </div>
             ))}

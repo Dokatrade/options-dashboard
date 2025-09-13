@@ -67,6 +67,26 @@ export function HelpModal({ onClose }: Props) {
             <li><strong>Portfolio</strong>: Total MaxLoss учитывает только вертикали; доля от депозита = MaxLossSum / Deposit.</li>
           </ul>
 
+          <p><strong>Показатель Δσ (Vol Edge)</strong></p>
+          <ul>
+            <li><strong>Определение</strong>: Δσ = IV_mid − σ_ref, в волатильностных пунктах (п.п.). Положительное — «rich», отрицательное — «cheap».</li>
+            <li><strong>IV_mid</strong>: implied vol, инвертированная из <em>mid</em> (среднее bid/ask) модели Блэка–Шоулза по ноге.</li>
+            <li><strong>σ_ref (бенчмарк)</strong>: приоритет источников — <em>markIv</em> (Bybit) → IV из <em>markPrice</em> → IV из книги (среднее bid/ask) → <em>HV30</em>.</li>
+            <li><strong>Входные для IV</strong>:
+              <div className="muted">S = индекс базового актива (Index), K и expiry из контракта, T — доля года до экспирации от «сейчас», r — параметр <em>Rate (r)</em> из окна View.</div>
+            </li>
+            <li><strong>Бэйдж</strong> рядом со значением: [↑] если Δσ ≥ +1.0 п.п. («rich»), [↓] если Δσ ≤ −1.0 п.п. («cheap»), иначе [–]. Пример: <code>1.6 [↑]</code>.</li>
+            <li><strong>Интерпретация</strong>:
+              <div className="muted">Rich → рынок котирует волу выше бенчмарка (продавцу выгоднее), Cheap → ниже бенчмарка (покупателю выгоднее).</div>
+            </li>
+            <li><strong>Практические кейсы</strong>:
+              <div className="muted">Rich: skew/smile (дорогие OTM), ожидание события, премия за инвентарь маркет‑мейкера, тонкая ликвидность/широкий спред. Cheap: спад спроса после события, избыток продавцов, локальная дислокация книги.</div>
+            </li>
+            <li><strong>Замечания</strong>:
+              <div className="muted">При очень малой vega дальних OTM Δσ шумный; учитывайте спред и комиссии. Для оценки денежного эффекта: Edge$ ≈ Vega × Δσ.</div>
+            </li>
+          </ul>
+
           <p><strong>Маркет‑данные</strong></p>
           <ul>
             <li><strong>Spot</strong> ETH и 24h% — по WS спота.</li>
