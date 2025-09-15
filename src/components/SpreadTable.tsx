@@ -1,6 +1,6 @@
 import React from 'react';
 import { useStore } from '../store/store';
-import { fetchOptionTickers, midPrice } from '../services/bybit';
+import { fetchOptionTickers, midPrice, bestBidAsk } from '../services/bybit';
 import { subscribeTicker } from '../services/ws';
 import { PositionView } from './PositionView';
 
@@ -158,8 +158,7 @@ export function SpreadTable() {
                             const d = dRaw != null ? (side === 'long' ? dRaw : -dRaw) : undefined;
                             const thRaw = t?.theta != null ? Number(t.theta) : undefined;
                             const th = thRaw != null ? (side === 'long' ? thRaw : -thRaw) : undefined;
-                            const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
-                            const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
+                            const { bid, ask } = bestBidAsk(t);
                             return (
                               <div key={leg.symbol} style={{border: '1px solid var(--border)', borderRadius: 8, padding: 6, fontSize: 'calc(1em - 1.5px)'}}>
                                 <div style={{display:'flex', justifyContent:'space-between', marginBottom: 2}}>

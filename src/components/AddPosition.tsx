@@ -1,8 +1,9 @@
 import React from 'react';
-import { fetchInstruments, fetchOptionTickers, midPrice } from '../services/bybit';
-import { subscribeOptionTicker } from '../services/ws';
+import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk, fetchOrderbookL1 } from '../services/bybit';
+import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
 import { useStore } from '../store/store';
 import type { InstrumentInfo, Leg, OptionType, SpreadPosition } from '../utils/types';
+import { ensureUsdtSymbol } from '../utils/symbols';
 
 type DraftLeg = {
   leg: Leg;
@@ -62,17 +63,18 @@ export function AddPosition() {
       // Union with tickers-derived symbols for this expiry if any are missing (Bybit occasionally skips items in instruments-info)
       try {
         const code = expiryCode(exp as number);
-        const wantSuffix = `-${type}`;
         const seen = new Set(base.map(i => i.symbol));
         const extras: InstrumentInfo[] = [];
         Object.keys(tickers || {}).forEach(sym => {
           if (!sym.includes(`-${code}-`)) return;
-          if (!sym.endsWith(wantSuffix)) return;
-          if (seen.has(sym)) return;
           const parts = sym.split('-');
+          const optPart = (parts?.[3] || '').toUpperCase();
+          if (!optPart.startsWith(type)) return;
+          if (seen.has(sym)) return;
           const strike = Number(parts?.[2]);
           if (!Number.isFinite(strike)) return;
-          extras.push({ symbol: sym, strike, optionType: type, deliveryTime: exp as number });
+          const settleCoin = parts?.[4] ? parts[4].toUpperCase() : 'USDT';
+          extras.push({ symbol: ensureUsdtSymbol(sym), strike, optionType: type, deliveryTime: exp as number, settleCoin });
         });
         if (extras.length) {
           const merged = [...base, ...extras].sort((a,b)=>a.strike - b.strike);
@@ -90,6 +92,24 @@ export function AddPosition() {
     return () => { m = false; };
   }, []);
 
+  // REST L1 fallback for visible chain symbols
+  React.useEffect(() => {
+    let stopped = false;
+    const poll = async () => {
+      const syms = Array.from(new Set([...chain.map(i=>i.symbol), ...draft.map(d=>d.leg.symbol)])).slice(0, 200);
+      for (const sym of syms) {
+        if (stopped) return;
+        try {
+          const { bid, ask } = await fetchOrderbookL1(sym);
+          if (bid != null || ask != null) setTickers(prev => ({ ...prev, [sym]: { ...(prev[sym] || {}), obBid: bid, obAsk: ask } }));
+        } catch {}
+      }
+    };
+    poll();
+    const id = setInterval(poll, 8000);
+    return () => { stopped = true; clearInterval(id); };
+  }, [chain, draft]);
+
   // Load draft from localStorage
   React.useEffect(() => {
     try {
@@ -106,9 +126,9 @@ export function AddPosition() {
       if (typeof d?.maxSpread === 'number') setMaxSpread(d.maxSpread);
       if (typeof d?.showAllStrikes === 'boolean') setShowAllStrikes(d.showAllStrikes);
       if (Array.isArray(d?.draft)) {
-        const legs = d.draft.map((L: any) => ({
+          const legs = d.draft.map((L: any) => ({
           leg: {
-            symbol: String(L?.leg?.symbol || ''),
+            symbol: ensureUsdtSymbol(String(L?.leg?.symbol || '')),
             strike: Number(L?.leg?.strike) || 0,
             optionType: L?.leg?.optionType === 'P' ? 'P' : 'C',
             expiryMs: Number(L?.leg?.expiryMs) || 0,
@@ -139,16 +159,20 @@ export function AddPosition() {
     const symbols = new Set<string>();
     chain.forEach(i => symbols.add(i.symbol));
     draft.forEach(d => symbols.add(d.leg.symbol));
-    const unsubs = Array.from(symbols).slice(0, 200).map(sym => subscribeOptionTicker(sym, (t) => setTickers((prev) => {
-      const cur = prev[t.symbol] || {};
-      const merged: any = { ...cur };
-      const keys: string[] = Object.keys(t as any);
-      for (const k of keys) {
-        const v: any = (t as any)[k];
-        if (v != null && !(Number.isNaN(v))) (merged as any)[k] = v;
-      }
-      return { ...prev, [t.symbol]: merged };
-    })));
+    const unsubs = Array.from(symbols).slice(0, 400).map(sym => {
+      const isOption = sym.includes('-');
+      const sub = isOption ? subscribeOptionTicker : subscribeSpotTicker;
+      return sub(sym, (t) => setTickers((prev) => {
+        const cur = prev[t.symbol] || {};
+        const merged: any = { ...cur };
+        const keys: string[] = Object.keys(t as any);
+        for (const k of keys) {
+          const v: any = (t as any)[k];
+          if (v != null && !(Number.isNaN(v))) (merged as any)[k] = v;
+        }
+        return { ...prev, [t.symbol]: merged };
+      }));
+    });
     return () => { unsubs.forEach(u => u()); };
   }, [chain, draft]);
 
@@ -173,6 +197,13 @@ export function AddPosition() {
     if (!inst) return;
     const leg: Leg = { symbol: inst.symbol, strike: inst.strike, optionType: inst.optionType, expiryMs: inst.deliveryTime };
     const q = Math.max(0.1, Math.round(Number(qty) * 10) / 10);
+    setDraft((d) => [...d, { leg, side, qty: q }]);
+  };
+
+  const addPerpLeg = (side: 'short' | 'long') => {
+    const q = Math.max(0.1, Math.round(Number(qty) * 10) / 10);
+    // Represent Perp as spot symbol with empty option fields
+    const leg: Leg = { symbol: 'ETHUSDT', strike: 0, optionType: 'C', expiryMs: 0 } as any;
     setDraft((d) => [...d, { leg, side, qty: q }]);
   };
 
@@ -283,7 +314,7 @@ export function AddPosition() {
             <option value="">Select strike</option>
             {filteredChain.map((i) => {
               const t = tickers[i.symbol];
-              const b = t?.bid1Price, a = t?.ask1Price;
+              const { bid: b, ask: a } = bestBidAsk(t);
               const m = (b != null && a != null) ? (Number(b) + Number(a)) / 2 : undefined; // strict mid from book
               const d = t?.delta != null ? Math.abs(Number(t.delta)) : undefined;
               const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
@@ -298,9 +329,12 @@ export function AddPosition() {
           <div className="muted">Volume (qty)</div>
           <input type="number" min={0.1} step={0.1} value={qty} onChange={(e) => setQty(Math.max(0.1, Number(e.target.value) || 0.1))} />
         </label>
-        <div style={{display:'flex', alignItems:'end', gap: 8}}>
+        <div style={{display:'flex', alignItems:'end', gap: 8, flexWrap:'wrap'}}>
           <button type="button" className="ghost" disabled={!strike} onClick={() => addLeg('short')}>Add Short</button>
           <button type="button" className="ghost" disabled={!strike} onClick={() => addLeg('long')}>Add Long</button>
+          <span className="muted" style={{margin:'0 6px'}}>or</span>
+          <button type="button" className="ghost" onClick={() => addPerpLeg('short')}>Add Perp Short (ETHUSDT)</button>
+          <button type="button" className="ghost" onClick={() => addPerpLeg('long')}>Add Perp Long (ETHUSDT)</button>
           <button type="button" className="ghost" onClick={() => { setDraft([]); localStorage.removeItem('options-draft-v1'); }}>Clear draft</button>
         </div>
       </div>
@@ -328,11 +362,12 @@ export function AddPosition() {
                 {draft.map((d, idx) => {
                   const t = tickers[d.leg.symbol];
                   const m = midPrice(t);
+                  const isPerp = !d.leg.symbol.includes('-');
                   return (
                     <tr key={idx}>
-                      <td>{d.leg.optionType}</td>
-                      <td>{new Date(d.leg.expiryMs).toISOString().slice(0,10)}</td>
-                      <td>{d.leg.strike}</td>
+                      <td>{isPerp ? 'PERP' : d.leg.optionType}</td>
+                      <td>{isPerp ? '—' : new Date(d.leg.expiryMs).toISOString().slice(0,10)}</td>
+                      <td>{isPerp ? '—' : d.leg.strike}</td>
                       <td>{d.side}</td>
                       <td>{d.qty}</td>
                       <td>{m != null ? `$${m.toFixed(2)}` : '—'}</td>

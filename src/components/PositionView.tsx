@@ -1,7 +1,7 @@
 import React from 'react';
 import type { PositionLeg } from '../utils/types';
-import { subscribeOptionTicker } from '../services/ws';
-import { midPrice, fetchHV30 } from '../services/bybit';
+import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
+import { midPrice, bestBidAsk, fetchHV30 } from '../services/bybit';
 import { bsPrice, bsImpliedVol } from '../utils/bs';
 
 type Props = {
@@ -124,7 +124,11 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
 
   React.useEffect(() => {
     const symbols = Array.from(new Set(legs.map(l => l.leg.symbol)));
-    const unsubs = symbols.slice(0, 300).map(sym => subscribeOptionTicker(sym, (t) => setTickers(prev => ({ ...prev, [t.symbol]: { ...(prev[t.symbol] || {}), ...t } }))));
+    const unsubs = symbols.slice(0, 300).map(sym => {
+      const isOption = sym.includes('-');
+      const sub = isOption ? subscribeOptionTicker : subscribeSpotTicker;
+      return sub(sym, (t) => setTickers(prev => ({ ...prev, [t.symbol]: { ...(prev[t.symbol] || {}), ...t } })));
+    });
     return () => { unsubs.forEach(u => u()); };
   }, [legsCalc]);
 
@@ -162,6 +166,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
     fetchHV30().then(v => { if (m) setHv30(v); }).catch(()=>{});
     return () => { m = false; };
   }, []);
+  
   // Initialize modal position (center horizontally; slight offset from top)
   React.useLayoutEffect(() => {
     if (pos != null) return;
@@ -199,8 +204,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
   const calc = React.useMemo(() => {
     const det = legsCalc.map((L) => {
       const t = tickers[L.leg.symbol] || {};
-      const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
-      const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
+      const { bid, ask } = bestBidAsk(t);
       const mid = midPrice(t) ?? 0;
       const iv = t?.markIv != null ? Number(t.markIv) : undefined;
       const dRaw = t?.delta != null ? Number(t.delta) : undefined;
@@ -239,8 +243,9 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
     const pnlAt = (S: number) => {
       let signedVal = 0;
       for (const L of legsCalc) {
+        const isPerp = !String(L.leg.symbol).includes('-');
         const K = Number(L.leg.strike) || 0; const q = Number(L.qty) || 1; const sign = L.side === 'short' ? 1 : -1;
-        const intrinsic = L.leg.optionType === 'C' ? Math.max(0, S - K) : Math.max(0, K - S);
+        const intrinsic = isPerp ? S : (L.leg.optionType === 'C' ? Math.max(0, S - K) : Math.max(0, K - S));
         signedVal += sign * intrinsic * q;
       }
       return netEntry - signedVal;
@@ -253,13 +258,15 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
       const v = pnlAt(S);
       if (isFinite(v)) { if (v < minV) minV = v; if (v > maxV) maxV = v; }
     }
-    // Unbounded check to the right: slope as S→∞ depends only on calls
+    // Unbounded check to the right: slope as S→∞ depends on calls and PERP legs
     const slopeRight = (() => {
       let s = 0;
       for (const L of legsCalc) {
-        if (L.leg.optionType !== 'C') continue;
+        const isPerp = !String(L.leg.symbol).includes('-');
         const sign = L.side === 'short' ? 1 : -1;
-        s += sign * (Number(L.qty) || 1);
+        if (L.leg.optionType === 'C' || isPerp) {
+          s += sign * (Number(L.qty) || 1);
+        }
       }
       // PnL = netEntry - s*S + ... when S > max K for calls
       return -s;
@@ -334,13 +341,18 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
       let v0 = 0;
       for (const L of legsCalc) {
         const t = tickers[L.leg.symbol] || {};
-        const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
-        const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
-        const Tfull = Math.max(0, (Number(L.leg.expiryMs) - tNow) / (365 * 24 * 60 * 60 * 1000));
-        const T = Math.max(0, Tfull * (1 - Math.min(1, Math.max(0, effTimePos))));
-        const price = bsPrice(L.leg.optionType, S0, Number(L.leg.strike) || 0, T, sigma, rPct / 100);
+        const isPerp = !String(L.leg.symbol).includes('-');
         const sign = L.side === 'short' ? 1 : -1;
-        v0 += sign * price * (Number(L.qty) || 1);
+        if (isPerp) {
+          v0 += sign * S0 * (Number(L.qty) || 1);
+        } else {
+          const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
+          const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
+          const Tfull = Math.max(0, (Number(L.leg.expiryMs) - tNow) / (365 * 24 * 60 * 60 * 1000));
+          const T = Math.max(0, Tfull * (1 - Math.min(1, Math.max(0, effTimePos))));
+          const price = bsPrice(L.leg.optionType, S0, Number(L.leg.strike) || 0, T, sigma, rPct / 100);
+          v0 += sign * price * (Number(L.qty) || 1);
+        }
       }
       const model0 = calc.netEntry - v0;
       const actual0 = calc.netEntry - calc.netMid;
@@ -351,13 +363,18 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
       let valNow = 0;
       for (const L of legsCalc) {
         const t = tickers[L.leg.symbol] || {};
-        const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
-        const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
-        const Tfull = Math.max(0, (Number(L.leg.expiryMs) - tNow) / (365 * 24 * 60 * 60 * 1000));
-        const T = Math.max(0, Tfull * (1 - Math.min(1, Math.max(0, effTimePos))));
-        const price = bsPrice(L.leg.optionType, S, Number(L.leg.strike) || 0, T, sigma, rPct / 100);
+        const isPerp = !String(L.leg.symbol).includes('-');
         const sign = L.side === 'short' ? 1 : -1;
-        valNow += sign * price * (Number(L.qty) || 1);
+        if (isPerp) {
+          valNow += sign * S * (Number(L.qty) || 1);
+        } else {
+          const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
+          const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
+          const Tfull = Math.max(0, (Number(L.leg.expiryMs) - tNow) / (365 * 24 * 60 * 60 * 1000));
+          const T = Math.max(0, Tfull * (1 - Math.min(1, Math.max(0, effTimePos))));
+          const price = bsPrice(L.leg.optionType, S, Number(L.leg.strike) || 0, T, sigma, rPct / 100);
+          valNow += sign * price * (Number(L.qty) || 1);
+        }
       }
       return (calc.netEntry - valNow) + anchorOffset;
     }) : undefined;
@@ -556,8 +573,9 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                  const pnlExpiry = (()=>{
                    let signedVal = 0; const netEntry = calc.netEntry;
                    for (const L of legsCalc) {
+                     const isPerp = !String(L.leg.symbol).includes('-');
                      const K = Number(L.leg.strike) || 0; const q = Number(L.qty) || 1; const sign = L.side === 'short' ? 1 : -1;
-                     const intrinsic = L.leg.optionType === 'C' ? Math.max(0, S - K) : Math.max(0, K - S);
+                     const intrinsic = isPerp ? S : (L.leg.optionType === 'C' ? Math.max(0, S - K) : Math.max(0, K - S));
                      signedVal += sign * intrinsic * q;
                    }
                    return netEntry - signedVal;
@@ -568,13 +586,18 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                    let valNow = 0; const tNow = Date.now();
                    for (const L of legsCalc) {
                      const t = tickers[L.leg.symbol] || {};
-                     const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
-                     const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
-                     const Tfull = Math.max(0, (Number(L.leg.expiryMs) - tNow) / (365 * 24 * 60 * 60 * 1000));
-                     const T = Math.max(0, Tfull * (1 - Math.min(1, Math.max(0, effTimePos))));
-                     const price = bsPrice(L.leg.optionType, S, Number(L.leg.strike) || 0, T, sigma, rPct / 100);
+                     const isPerp = !String(L.leg.symbol).includes('-');
                      const sign = L.side === 'short' ? 1 : -1;
-                     valNow += sign * price * (Number(L.qty) || 1);
+                     if (isPerp) {
+                       valNow += sign * S * (Number(L.qty) || 1);
+                     } else {
+                       const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
+                       const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
+                       const Tfull = Math.max(0, (Number(L.leg.expiryMs) - tNow) / (365 * 24 * 60 * 60 * 1000));
+                       const T = Math.max(0, Tfull * (1 - Math.min(1, Math.max(0, effTimePos))));
+                       const price = bsPrice(L.leg.optionType, S, Number(L.leg.strike) || 0, T, sigma, rPct / 100);
+                       valNow += sign * price * (Number(L.qty) || 1);
+                     }
                    }
                    // Anchor offset so crosshair 'Today' value matches actual PnL at spot,
                    // and decays to 0 as we approach expiry
@@ -584,13 +607,18 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                      let v0 = 0; const tNow2 = Date.now();
                      for (const L of legsCalc) {
                        const t = tickers[L.leg.symbol] || {};
-                       const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
-                       const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
-                       const Tfull = Math.max(0, (Number(L.leg.expiryMs) - tNow2) / (365 * 24 * 60 * 60 * 1000));
-                       const T = Math.max(0, Tfull * (1 - Math.min(1, Math.max(0, effTimePos))));
-                       const price = bsPrice(L.leg.optionType, S0, Number(L.leg.strike) || 0, T, sigma, rPct / 100);
+                       const isPerp = !String(L.leg.symbol).includes('-');
                        const sign = L.side === 'short' ? 1 : -1;
-                       v0 += sign * price * (Number(L.qty) || 1);
+                       if (isPerp) {
+                         v0 += sign * S0 * (Number(L.qty) || 1);
+                       } else {
+                         const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
+                         const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
+                         const Tfull = Math.max(0, (Number(L.leg.expiryMs) - tNow2) / (365 * 24 * 60 * 60 * 1000));
+                         const T = Math.max(0, Tfull * (1 - Math.min(1, Math.max(0, effTimePos))));
+                         const price = bsPrice(L.leg.optionType, S0, Number(L.leg.strike) || 0, T, sigma, rPct / 100);
+                         v0 += sign * price * (Number(L.qty) || 1);
+                       }
                      }
                      const modelPnL0 = calc.netEntry - v0;
                      const actualPnL0 = calc.netEntry - calc.netMid;
@@ -773,7 +801,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
           </div>
 
           <div className="grid" style={{gap: 6}}>
-            {legs.map((L) => { const t = tickers[L.leg.symbol] || {}; const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined; const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined; const mid = midPrice(t); const iv = t?.markIv != null ? Number(t.markIv) : undefined; const dRaw = t?.delta != null ? Number(t.delta) : undefined; const vRaw = t?.vega != null ? Number(t.vega) : undefined; const thRaw = t?.theta != null ? Number(t.theta) : undefined; const sgn = L.side === 'long' ? 1 : -1; const x = { L, bid, ask, mid, iv, d: dRaw != null ? sgn * dRaw : undefined, v: vRaw != null ? sgn * vRaw : undefined, th: thRaw != null ? sgn * thRaw : undefined, oi: t?.openInterest != null ? Number(t.openInterest) : undefined }; const isHidden = (hiddenSymbols || []).includes(L.leg.symbol); return (
+                {legs.map((L) => { const t = tickers[L.leg.symbol] || {}; const { bid, ask } = bestBidAsk(t); const mid = midPrice(t); const iv = t?.markIv != null ? Number(t.markIv) : undefined; const dRaw = t?.delta != null ? Number(t.delta) : undefined; const vRaw = t?.vega != null ? Number(t.vega) : undefined; const thRaw = t?.theta != null ? Number(t.theta) : undefined; const sgn = L.side === 'long' ? 1 : -1; const x = { L, bid, ask, mid, iv, d: dRaw != null ? sgn * dRaw : undefined, v: vRaw != null ? sgn * vRaw : undefined, th: thRaw != null ? sgn * thRaw : undefined, oi: t?.openInterest != null ? Number(t.openInterest) : undefined }; const isHidden = (hiddenSymbols || []).includes(L.leg.symbol); return (
               <div key={L.leg.symbol} style={{border: '1px solid var(--border)', borderRadius: 8, padding: 6, fontSize: 'calc(1em - 3px)', ...(isHidden ? { background: 'rgba(128,128,128,.12)' } : {})}}>
                 <div style={{display:'flex', justifyContent:'space-between', marginBottom: 2}}>
                   <div style={{display:'flex', alignItems:'center', gap:8}}>
@@ -825,8 +853,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                     }
                     let ivFromBook: number | undefined;
                     if (S != null && isFinite(S) && K > 0 && T > 0) {
-                      const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
-                      const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
+                      const { bid, ask } = bestBidAsk(t);
                       const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
                       const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
                       if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) ivFromBook = 0.5 * (ivBid + ivAsk);
@@ -861,8 +888,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                     const sigmaFromMarkPrice = (markPrice != null && isFinite(markPrice) && markPrice >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, markPrice, rPct / 100) : undefined;
                     let sigmaFromBook: number | undefined;
                     {
-                      const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
-                      const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
+                      const { bid, ask } = bestBidAsk(t);
                       const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
                       const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
                       if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) sigmaFromBook = 0.5 * (ivBid + ivAsk);

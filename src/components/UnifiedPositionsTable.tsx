@@ -1,12 +1,13 @@
 import React from 'react';
 import { useStore } from '../store/store';
-import { subscribeOptionTicker } from '../services/ws';
-import { midPrice, fetchOptionTickers, fetchHV30 } from '../services/bybit';
+import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
+import { midPrice, bestBidAsk, fetchOptionTickers, fetchHV30, fetchOrderbookL1 } from '../services/bybit';
 import { bsImpliedVol } from '../utils/bs';
 import type { Position, PositionLeg, SpreadPosition } from '../utils/types';
 import { downloadCSV, toCSV } from '../utils/csv';
 import { PositionView } from './PositionView';
 import { EditPositionModal } from './EditPositionModal';
+import { IfModal, IfRule } from './IfModal';
 
 type Row = {
   id: string;
@@ -78,6 +79,12 @@ export function UnifiedPositionsTable() {
   const [sortDir, setSortDir] = React.useState<'asc'|'desc'>('desc');
   const [hv30, setHv30] = React.useState<number | undefined>();
   const [rPct, setRPct] = React.useState(0);
+  const [ifRow, setIfRow] = React.useState<Row | null>(null);
+  const [ifRules, setIfRules] = React.useState<Record<string, IfRule>>(() => {
+    try { const raw = localStorage.getItem('if-rules-v1'); return raw ? JSON.parse(raw) : {}; } catch { return {}; }
+  });
+  // Real spot for IF-only calculations
+  const [ifSpot, setIfSpot] = React.useState<number | undefined>();
 
   // Load persisted UI prefs
   React.useEffect(() => {
@@ -114,17 +121,21 @@ export function UnifiedPositionsTable() {
   React.useEffect(() => {
     const symbols = new Set<string>();
     rows.forEach(r => r.legs.forEach(l => symbols.add(l.leg.symbol)));
-    const unsubs = Array.from(symbols).slice(0, 400).map(sym => subscribeOptionTicker(sym, (t) => setTickers(prev => {
-      const cur = prev[t.symbol] || {};
-      // merge without overwriting existing values with undefined/null
-      const merged: any = { ...cur };
-      const keys: string[] = Object.keys(t as any);
-      for (const k of keys) {
-        const v: any = (t as any)[k];
-        if (v != null && !(Number.isNaN(v))) (merged as any)[k] = v;
-      }
-      return { ...prev, [t.symbol]: merged };
-    })));
+    const unsubs = Array.from(symbols).slice(0, 1000).map(sym => {
+      const isOption = sym.includes('-');
+      const sub = isOption ? subscribeOptionTicker : subscribeSpotTicker;
+      return sub(sym, (t) => setTickers(prev => {
+        const cur = prev[t.symbol] || {};
+        // merge without overwriting existing values with undefined/null
+        const merged: any = { ...cur };
+        const keys: string[] = Object.keys(t as any);
+        for (const k of keys) {
+          const v: any = (t as any)[k];
+          if (v != null && !(Number.isNaN(v))) (merged as any)[k] = v;
+        }
+        return { ...prev, [t.symbol]: merged };
+      }));
+    });
     return () => { unsubs.forEach(u => u()); };
   }, [rows]);
 
@@ -134,6 +145,15 @@ export function UnifiedPositionsTable() {
     fetchHV30().then(v => { if (mounted) setHv30(v); }).catch(()=>{});
     return () => { mounted = false; };
   }, []);
+  // Subscribe real spot (ETHUSDT) for IF rules only
+  React.useEffect(() => {
+    const unsub = subscribeSpotTicker('ETHUSDT', (t) => {
+      const p = (t.lastPrice != null && isFinite(Number(t.lastPrice))) ? Number(t.lastPrice) : (t.markPrice != null ? Number(t.markPrice) : undefined);
+      if (p != null && isFinite(p)) setIfSpot(p);
+    });
+    return () => { try { unsub(); } catch {} };
+  }, []);
+  
 
   // Read persisted rate like View modal uses
   React.useEffect(() => {
@@ -144,6 +164,334 @@ export function UnifiedPositionsTable() {
       if (typeof s?.rPct === 'number') setRPct(s.rPct);
     } catch {}
   }, []);
+
+  // Persist IF rules
+  React.useEffect(() => {
+    try { localStorage.setItem('if-rules-v1', JSON.stringify(ifRules)); } catch {}
+  }, [ifRules]);
+
+  // Helpers to compute per-leg metrics consistent with View
+  const computeSpotForRow = (r: Row): number | undefined => {
+    // Prefer real spot for IF, fallback to any leg's indexPrice
+    if (ifSpot != null && isFinite(ifSpot)) return ifSpot;
+    for (const L of r.legs) {
+      const t = tickers[L.leg.symbol] || {};
+      if (t?.indexPrice != null && isFinite(Number(t.indexPrice))) return Number(t.indexPrice);
+    }
+    return undefined;
+  };
+  const ivPctForLeg = (L: PositionLeg, r: Row): number | undefined => {
+    const t = tickers[L.leg.symbol] || {};
+    const ivMark = t?.markIv != null ? Number(t.markIv) : undefined;
+    if (ivMark != null && isFinite(ivMark)) return ivMark <= 3 ? ivMark * 100 : ivMark;
+    const S = t?.indexPrice != null ? Number(t.indexPrice) : computeSpotForRow(r);
+    const K = Number(L.leg.strike) || 0;
+    const T = Math.max(0, (Number(L.leg.expiryMs) - Date.now()) / (365 * 24 * 60 * 60 * 1000));
+    const markPrice = t?.markPrice != null ? Number(t.markPrice) : undefined;
+    if (S != null && isFinite(S) && K > 0 && T > 0 && markPrice != null && isFinite(markPrice) && markPrice >= 0) {
+      const iv = bsImpliedVol(L.leg.optionType, S, K, T, markPrice, rPct / 100);
+      if (iv != null && isFinite(iv)) return iv * 100;
+    }
+    let ivFromBook: number | undefined;
+    if (S != null && isFinite(S) && K > 0 && T > 0) {
+      const { bid, ask } = bestBidAsk(t);
+      const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
+      const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
+      if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) ivFromBook = 0.5 * (ivBid + ivAsk);
+      else if (ivBid != null && isFinite(ivBid)) ivFromBook = ivBid;
+      else if (ivAsk != null && isFinite(ivAsk)) ivFromBook = ivAsk;
+    }
+    if (ivFromBook != null && isFinite(ivFromBook)) return ivFromBook * 100;
+    const mid = midPrice(t);
+    if (S != null && isFinite(S) && K > 0 && T > 0 && mid != null && isFinite(mid) && mid >= 0) {
+      const iv = bsImpliedVol(L.leg.optionType, S, K, T, mid, rPct / 100);
+      if (iv != null && isFinite(iv)) return iv * 100;
+    }
+    const v = hv30;
+    return (v != null && isFinite(v)) ? Number(v) : undefined;
+  };
+  const dSigmaForLeg = (L: PositionLeg, r: Row): number | undefined => {
+    const t = tickers[L.leg.symbol] || {};
+    const S = t?.indexPrice != null ? Number(t.indexPrice) : computeSpotForRow(r);
+    const K = Number(L.leg.strike) || 0;
+    const T = Math.max(0, (Number(L.leg.expiryMs) - Date.now()) / (365 * 24 * 60 * 60 * 1000));
+    if (!(S != null && isFinite(S) && K > 0 && T > 0)) return undefined;
+    const mid = midPrice(t);
+    const ivMid = (mid != null && isFinite(mid) && mid >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, mid, rPct / 100) : undefined;
+    const rawMarkIvPct = t?.markIv != null ? Number(t.markIv) : undefined;
+    const markIvPct = (rawMarkIvPct != null && isFinite(rawMarkIvPct)) ? (rawMarkIvPct <= 3 ? rawMarkIvPct * 100 : rawMarkIvPct) : undefined;
+    const sigmaFromMarkIv = (markIvPct != null && isFinite(markIvPct)) ? (markIvPct / 100) : undefined;
+    const markPrice = t?.markPrice != null ? Number(t.markPrice) : undefined;
+    const sigmaFromMarkPrice = (markPrice != null && isFinite(markPrice) && markPrice >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, markPrice, rPct / 100) : undefined;
+    let sigmaFromBook: number | undefined;
+    {
+      const { bid, ask } = bestBidAsk(t);
+      const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
+      const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
+      if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) sigmaFromBook = 0.5 * (ivBid + ivAsk);
+      else if (ivBid != null && isFinite(ivBid)) sigmaFromBook = ivBid;
+      else if (ivAsk != null && isFinite(ivAsk)) sigmaFromBook = ivAsk;
+    }
+    const sigmaFromHV = (hv30 != null && isFinite(hv30)) ? (Number(hv30) / 100) : undefined;
+    const sigmaRef = sigmaFromMarkIv ?? sigmaFromMarkPrice ?? sigmaFromBook ?? sigmaFromHV;
+    if (!(ivMid != null && isFinite(ivMid) && sigmaRef != null && isFinite(sigmaRef))) return undefined;
+    const dSigmaPp = (ivMid - sigmaRef) * 100;
+    return dSigmaPp;
+  };
+
+  // Max possible profit at expiry (finite) or undefined if unbounded/invalid
+  const maxProfitForRow = (r: Row, c: ReturnType<typeof calc>): number | undefined => {
+    try {
+      const legs = r.legs;
+      const strikes = legs.map(L => Number(L.leg.strike) || 0).filter(s => isFinite(s));
+      if (!strikes.length) return undefined;
+      const Ks = Array.from(new Set(strikes)).sort((a,b)=>a-b);
+      const netEntry = c.netEntry;
+      const pnlAt = (S: number) => {
+        let signedVal = 0;
+        for (const L of legs) {
+          const isPerp = !String(L.leg.symbol).includes('-');
+          const K = Number(L.leg.strike) || 0; const q = Number(L.qty) || 1; const sign = L.side === 'short' ? 1 : -1;
+          const intrinsic = isPerp ? S : (L.leg.optionType === 'C' ? Math.max(0, S - K) : Math.max(0, K - S));
+          signedVal += sign * intrinsic * q;
+        }
+        return netEntry - signedVal;
+      };
+      // Unbounded check to the right (calls and PERP)
+      let s = 0;
+      for (const L of legs) {
+        const isPerp = !String(L.leg.symbol).includes('-');
+        if (L.leg.optionType === 'C' || isPerp) s += (L.side === 'short' ? 1 : -1) * (Number(L.qty) || 1);
+      }
+      const slopeRight = -s;
+      if (slopeRight > 0) return undefined; // unbounded profit to the right
+      const S0 = 0;
+      const Sbig = (Ks.length ? Ks[Ks.length - 1] : 1000) * 5 + 1;
+      const candidates = [S0, ...Ks, Sbig];
+      let maxV = -Infinity;
+      for (const S of candidates) {
+        const v = pnlAt(S);
+        if (isFinite(v) && v > maxV) maxV = v;
+      }
+      return isFinite(maxV) ? maxV : undefined;
+    } catch { return undefined; }
+  };
+
+  // Evaluate a single condition live for IF modal preview
+  const evalSingleCondLive = (r: Row, args: { scope: 'position'|'leg'; legSymbol?: string; cond: { param: string; cmp: any; value: number } }): boolean => {
+    const { scope, legSymbol, cond } = args;
+    if (scope === 'position') {
+      const c = calc(r);
+      const spot = computeSpotForRow(r);
+      const valOf = (p: string): number | undefined => {
+        switch (p) {
+          case 'spot': return spot;
+          case 'netEntry': return c.netEntry;
+          case 'netMid': return c.netMid;
+          case 'pnl': return c.pnl;
+          case 'pnlPctMax': {
+            const mp = maxProfitForRow(r, c);
+            if (!(mp != null && isFinite(mp) && mp > 0)) return undefined;
+            return (c.pnl / mp) * 100;
+          }
+          case 'delta': return c.greeks.delta;
+          case 'vega': return c.greeks.vega;
+          case 'theta': return c.greeks.theta;
+          case 'dte': return c.dte ?? undefined;
+          default: return undefined;
+        }
+      };
+      return evalCond(valOf(cond.param), cond.cmp, Number(cond.value));
+    } else {
+      const legs = r.legs.filter(L => !legSymbol || L.leg.symbol === legSymbol);
+      for (const L of legs) {
+        const t = tickers[L.leg.symbol] || {};
+        const { bid, ask } = bestBidAsk(t);
+        const mid = midPrice(t);
+        const ivp = ivPctForLeg(L, r);
+        const d = t?.delta != null ? (L.side === 'long' ? Number(t.delta) : -Number(t.delta)) : undefined;
+        const v = t?.vega != null ? (L.side === 'long' ? Number(t.vega) : -Number(t.vega)) : undefined;
+        const th = t?.theta != null ? (L.side === 'long' ? Number(t.theta) : -Number(t.theta)) : undefined;
+        const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
+        const ds = dSigmaForLeg(L, r);
+        const spot = computeSpotForRow(r);
+        const pnlLeg = (() => {
+          const entry = Number(L.entryPrice);
+          const m = mid;
+          const qty = Number(L.qty) || 1;
+          const sgn2 = L.side === 'short' ? 1 : -1;
+          return (isFinite(entry) && m != null && isFinite(m)) ? sgn2 * (entry - m) * qty : undefined;
+        })();
+        const valOf = (p: string): number | undefined => {
+          switch (p) {
+            case 'spot': return spot;
+            case 'bid': return bid; case 'ask': return ask; case 'mid': return mid; case 'entry': return Number(L.entryPrice);
+            case 'pnlLeg': return pnlLeg;
+            case 'ivPct': return ivp;
+            case 'vega': return v; case 'delta': return d; case 'theta': return th; case 'oi': return oi;
+            case 'dSigma': return ds;
+            default: return undefined;
+          }
+        };
+        if (evalCond(valOf(cond.param), cond.cmp, Number(cond.value))) return true;
+      }
+      return false;
+    }
+  };
+
+  const evalCond = (lhs: number | undefined, cmp: '>' | '<' | '=' | '>=' | '<=', rhs: number): boolean => {
+    if (!(lhs != null && isFinite(lhs))) return false;
+    if (cmp === '>') return lhs > rhs;
+    if (cmp === '<') return lhs < rhs;
+    if (cmp === '>=') return lhs >= rhs;
+    if (cmp === '<=') return lhs <= rhs;
+    return Math.abs(lhs - rhs) < 1e-9;
+  };
+  const evalChainLeg = (r: Row, c: any, chain: { legSymbol?: string; conds: Array<{ conj?: 'AND'|'OR'; cond: { param: string; cmp: any; value: number } }> }) => {
+    const matchedSyms = new Set<string>();
+    // Evaluate against target legs (all or specific);
+    const iterLegs = r.legs.filter(L => !chain.legSymbol || L.leg.symbol === chain.legSymbol);
+    for (const L of iterLegs) {
+      const t = tickers[L.leg.symbol] || {};
+      const { bid, ask } = bestBidAsk(t);
+      const mid = midPrice(t);
+      const ivp = ivPctForLeg(L, r);
+      const d = t?.delta != null ? (L.side === 'long' ? Number(t.delta) : -Number(t.delta)) : undefined;
+      const v = t?.vega != null ? (L.side === 'long' ? Number(t.vega) : -Number(t.vega)) : undefined;
+      const th = t?.theta != null ? (L.side === 'long' ? Number(t.theta) : -Number(t.theta)) : undefined;
+      const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
+      const ds = dSigmaForLeg(L, r);
+      const spot = computeSpotForRow(r);
+      const pnlLeg = (() => {
+        const entry = Number(L.entryPrice);
+        const m = mid;
+        const qty = Number(L.qty) || 1;
+        const sgn2 = L.side === 'short' ? 1 : -1;
+        return (isFinite(entry) && m != null && isFinite(m)) ? sgn2 * (entry - m) * qty : undefined;
+      })();
+      const valOf = (p: string): number | undefined => {
+        switch (p) {
+          case 'spot': return spot;
+          case 'bid': return bid; case 'ask': return ask; case 'mid': return mid; case 'entry': return Number(L.entryPrice);
+          case 'pnlLeg': return pnlLeg;
+          case 'ivPct': return ivp;
+          case 'vega': return v; case 'delta': return d; case 'theta': return th; case 'oi': return oi;
+          case 'dSigma': return ds;
+          default: return undefined;
+        }
+      };
+      let ok: boolean | undefined = undefined;
+      for (let i = 0; i < chain.conds.length; i++) {
+        const it = chain.conds[i];
+        const cur = evalCond(valOf(it.cond.param), it.cond.cmp, Number(it.cond.value));
+        if (i === 0) ok = cur; else ok = (it.conj === 'OR') ? ((ok as boolean) || cur) : ((ok as boolean) && cur);
+      }
+      if (ok) matchedSyms.add(L.leg.symbol);
+    }
+    return matchedSyms;
+  };
+  const evalChainPos = (r: Row, c: any, chain: { conds: Array<{ conj?: 'AND'|'OR'; cond: { param: string; cmp: any; value: number } }> }) => {
+    const spot = computeSpotForRow(r);
+      const valOf = (p: string): number | undefined => {
+        switch (p) {
+          case 'spot': return spot;
+          case 'netEntry': return c.netEntry;
+          case 'netMid': return c.netMid;
+          case 'pnl': return c.pnl;
+          case 'pnlPctMax': {
+            const mp = maxProfitForRow(r, c);
+            if (!(mp != null && isFinite(mp) && mp > 0)) return undefined;
+            return (c.pnl / mp) * 100;
+          }
+          case 'delta': return c.greeks.delta;
+          case 'vega': return c.greeks.vega;
+          case 'theta': return c.greeks.theta;
+          case 'dte': return c.dte ?? undefined;
+          default: return undefined;
+        }
+      };
+    let ok: boolean | undefined = undefined;
+    for (let i = 0; i < chain.conds.length; i++) {
+      const it = chain.conds[i];
+      const cur = evalCond(valOf(it.cond.param), it.cond.cmp, Number(it.cond.value));
+      if (i === 0) ok = cur; else ok = (it.conj === 'OR') ? ((ok as boolean) || cur) : ((ok as boolean) && cur);
+    }
+    return !!ok;
+  };
+  const evalRule = (r: Row, c: any, rule?: IfRule): { matched: boolean; matchedLegs?: Set<string> } => {
+    if (!rule || !rule.chains.length) return { matched: false };
+    let agg: boolean | undefined = undefined;
+    let matchedLegs = new Set<string>();
+    for (let i = 0; i < rule.chains.length; i++) {
+      const wrap = rule.chains[i];
+      const ch = wrap.chain;
+      let cur: boolean;
+      if (ch.scope === 'leg') {
+        const syms = evalChainLeg(r, c, ch);
+        if (syms.size > 0) { cur = true; syms.forEach(s=>matchedLegs.add(s)); } else cur = false;
+      } else {
+        cur = evalChainPos(r, c, ch);
+      }
+      if (i === 0) agg = cur; else agg = (wrap.conj === 'OR') ? ((agg as boolean) || cur) : ((agg as boolean) && cur);
+    }
+    return { matched: !!agg, matchedLegs };
+  };
+
+  // Per-leg highlight: a leg is highlighted if it satisfies the combined result of ONLY leg-scope chains
+  const matchedLegsOnly = (r: Row, c: any, rule?: IfRule): Set<string> => {
+    const out = new Set<string>();
+    if (!rule || !rule.chains.length) return out;
+    const legChains = rule.chains.filter(w => w.chain.scope === 'leg');
+    if (!legChains.length) return out;
+    for (const L of r.legs) {
+      // Only consider chains that target this symbol or any
+      const relevant = legChains.filter(w => !w.chain.legSymbol || w.chain.legSymbol === L.leg.symbol);
+      if (!relevant.length) continue;
+      let agg: boolean | undefined = undefined;
+      for (let i = 0; i < relevant.length; i++) {
+        const wrap = relevant[i];
+        const ch = wrap.chain;
+        // evaluate this leg against chain conds
+        const t = tickers[L.leg.symbol] || {};
+        const { bid, ask } = bestBidAsk(t);
+        const mid = midPrice(t);
+        const ivp = ivPctForLeg(L, r);
+        const d = t?.delta != null ? (L.side === 'long' ? Number(t.delta) : -Number(t.delta)) : undefined;
+        const v = t?.vega != null ? (L.side === 'long' ? Number(t.vega) : -Number(t.vega)) : undefined;
+        const th = t?.theta != null ? (L.side === 'long' ? Number(t.theta) : -Number(t.theta)) : undefined;
+        const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
+        const ds = dSigmaForLeg(L, r);
+        const spot = computeSpotForRow(r);
+        const pnlLeg = (() => {
+          const entry = Number(L.entryPrice);
+          const m = mid;
+          const qty = Number(L.qty) || 1;
+          const sgn2 = L.side === 'short' ? 1 : -1;
+          return (isFinite(entry) && m != null && isFinite(m)) ? sgn2 * (entry - m) * qty : undefined;
+        })();
+        const valOf = (p: string): number | undefined => {
+          switch (p) {
+            case 'spot': return spot;
+            case 'bid': return bid; case 'ask': return ask; case 'mid': return mid; case 'entry': return Number(L.entryPrice);
+            case 'pnlLeg': return pnlLeg;
+            case 'ivPct': return ivp;
+            case 'vega': return v; case 'delta': return d; case 'theta': return th; case 'oi': return oi;
+            case 'dSigma': return ds;
+            default: return undefined;
+          }
+        };
+        let cur: boolean | undefined = undefined;
+        for (let j = 0; j < ch.conds.length; j++) {
+          const it = ch.conds[j];
+          const here = evalCond(valOf(it.cond.param), it.cond.cmp, Number(it.cond.value));
+          if (j === 0) cur = here; else cur = (it.conj === 'OR') ? ((cur as boolean) || here) : ((cur as boolean) && here);
+        }
+        if (i === 0) agg = !!cur; else agg = (wrap.conj === 'OR') ? ((agg as boolean) || !!cur) : ((agg as boolean) && !!cur);
+      }
+      if (agg) out.add(L.leg.symbol);
+    }
+    return out;
+  };
 
   // REST fallback to populate bid/ask for symbols missing them in WS
   React.useEffect(() => {
@@ -178,6 +526,26 @@ export function UnifiedPositionsTable() {
     return () => { mounted = false; clearInterval(id); };
   }, [rows]);
 
+  // REST L1 fallback for stubborn symbols (polls small set of visible legs)
+  React.useEffect(() => {
+    let stopped = false;
+    const poll = async () => {
+      const syms = Array.from(new Set(rows.flatMap(r => r.legs.map(L => L.leg.symbol)))).slice(0, 120);
+      for (const sym of syms) {
+        if (stopped) return;
+        try {
+          const { bid, ask } = await fetchOrderbookL1(sym);
+          if (bid != null || ask != null) {
+            setTickers(prev => ({ ...prev, [sym]: { ...(prev[sym] || {}), obBid: bid, obAsk: ask } }));
+          }
+        } catch {}
+      }
+    };
+    poll();
+    const id = setInterval(poll, 8000);
+    return () => { stopped = true; clearInterval(id); };
+  }, [rows]);
+
   const calc = (r: Row) => {
     // Per-leg live mid and greeks (ignore hidden legs)
     const legs = r.legs.filter(L => !L.hidden).map((L) => {
@@ -189,8 +557,7 @@ export function UnifiedPositionsTable() {
         vega: t?.vega != null ? Number(t.vega) : 0,
         theta: t?.theta != null ? Number(t.theta) : 0,
       };
-      const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
-      const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
+      const { bid, ask } = bestBidAsk(t);
       const spread = bid != null && ask != null && bid > 0 && ask > 0 ? Math.max(0, ask - bid) : undefined;
       const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
       return { ...L, mid, greeks, bid, ask, spread, oi };
@@ -218,16 +585,19 @@ export function UnifiedPositionsTable() {
       maxSpreadPct: spreadPcts.length ? Math.max(...spreadPcts) : undefined,
     } as { maxSpread?: number; minOI?: number; maxSpreadPct?: number };
 
-    // Vertical extras
+    // Vertical extras and nearest DTE (works for any position)
     let width: number | undefined;
     let maxLoss: number | undefined;
     let dte: number | undefined;
-    const expSet = Array.from(new Set(legs.map(L => L.leg.expiryMs)));
+    const expSet = Array.from(new Set(legs.map(L => Number(L.leg.expiryMs)).filter(ms => Number.isFinite(ms) && ms > 0)));
+    if (expSet.length >= 1) {
+      const nearest = Math.min(...expSet);
+      dte = Math.max(0, Math.round((nearest - Date.now()) / (1000 * 60 * 60 * 24)));
+    }
     if (r.kind === 'vertical' && expSet.length === 1) {
       const strikes = legs.map(L => L.leg.strike);
       width = Math.abs(strikes[0] - strikes[1]);
       maxLoss = Math.max(0, (width - (r.cEnter ?? 0)) * (r.qty ?? 1));
-      dte = Math.max(0, Math.round((expSet[0] - Date.now()) / (1000 * 60 * 60 * 24)));
     }
 
     return { legs, netEntry, netMid, pnl, greeks: g, liq, width, maxLoss, dte };
@@ -240,7 +610,7 @@ export function UnifiedPositionsTable() {
         id: r.id,
         kind: r.kind,
         legs: r.legs.filter(L => !L.hidden).map(L => `${L.side}${L.leg.optionType}${L.leg.strike}x${L.qty}@${L.entryPrice}`).join(' | '),
-        expiry: Array.from(new Set(r.legs.map(L => new Date(L.leg.expiryMs).toISOString().slice(0,10)))).join(' & '),
+        expiry: Array.from(new Set(r.legs.map(L => Number(L.leg.expiryMs)).filter(ms => Number.isFinite(ms) && ms > 0).map(ms => new Date(ms).toISOString().slice(0,10)))).join(' & '),
         netEntry: c.netEntry.toFixed(2),
         netMid: c.netMid.toFixed(2),
         pnl: c.pnl.toFixed(2),
@@ -348,20 +718,24 @@ export function UnifiedPositionsTable() {
                 if (sortKey === 'pnl') return sgn * ((B.c.pnl || 0) - (A.c.pnl || 0));
                 if (sortKey === 'theta') return sgn * ((B.c.greeks.theta || 0) - (A.c.greeks.theta || 0));
                 if (sortKey === 'expiry') {
-                  const eA = Math.min(...A.r.legs.map(L => Number(L.leg.expiryMs) || 0));
-                  const eB = Math.min(...B.r.legs.map(L => Number(L.leg.expiryMs) || 0));
+                  const eAarr = A.r.legs.map(L => Number(L.leg.expiryMs)).filter(ms => Number.isFinite(ms) && ms > 0);
+                  const eBarr = B.r.legs.map(L => Number(L.leg.expiryMs)).filter(ms => Number.isFinite(ms) && ms > 0);
+                  const eA = eAarr.length ? Math.min(...eAarr) : 0;
+                  const eB = eBarr.length ? Math.min(...eBarr) : 0;
                   return sgn * (eB - eA);
                 }
                 return 0;
               });
               return augmented.map(({ r, c }) => {
-              const expiries = Array.from(new Set(r.legs.map(L => L.leg.expiryMs))).sort();
-              const expLabel = expiries.length === 1 ? new Date(expiries[0]).toISOString().slice(0,10) : 'mixed';
+              const rule = ifRules[r.id];
+              const evalRes = evalRule(r, c, rule);
+              const expiries = Array.from(new Set(r.legs.map(L => Number(L.leg.expiryMs)).filter(ms => Number.isFinite(ms) && ms > 0))).sort();
+              const expLabel = expiries.length === 1 ? new Date(expiries[0]).toISOString().slice(0,10) : (expiries.length > 1 ? 'mixed' : '—');
               const dte = c.dte != null ? `${c.dte}d` : (expiries.length === 1 ? `${Math.max(0, Math.round((expiries[0]-Date.now())/(86400000)))}d` : '—');
               const typeLabel = strategyName(r.legs);
               return (
                 <>
-                  <tr key={r.id}>
+                  <tr key={r.id} style={evalRes.matched ? { background:'rgba(64,64,64,.30)' } : undefined}>
                     <td style={r.favorite ? { borderLeft: '3px solid rgba(255, 215, 0, 0.5)', paddingLeft: 6 } : undefined}>
                       {typeLabel}
                       {r.closedAt && (
@@ -373,11 +747,17 @@ export function UnifiedPositionsTable() {
                           <span style={{ marginLeft: 6, background: 'rgba(128,128,128,.18)', color: '#7a7a7a', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>hidden ×{hiddenCount}</span>
                         );
                       })()}
+                      {(!!ifRules[r.id]?.chains?.length) && (
+                        <span style={{ marginLeft: 6, background: 'rgba(160,120,60,.18)', color: '#8B4513', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>IF</span>
+                      )}
                     </td>
                     <td style={{fontSize: 'calc(1em - 1.5px)'}}>
-                      {r.legs.map((L, i) => (
-                        <div key={i} className="muted">{L.side} {L.leg.optionType} {L.leg.strike} × {L.qty}</div>
-                      ))}
+                      {r.legs.map((L, i) => {
+                        const isPerp = !String(L.leg.symbol).includes('-');
+                        return (
+                          <div key={i} className="muted">{L.side} {isPerp ? 'PERP' : L.leg.optionType} {isPerp ? '' : L.leg.strike} × {L.qty}</div>
+                        );
+                      })}
                     </td>
                     <td>{expLabel} · {dte}</td>
                     <td>{c.netEntry.toFixed(2)}</td>
@@ -429,7 +809,8 @@ export function UnifiedPositionsTable() {
                           }} style={{height: 28, lineHeight: '28px', padding: '0 10px'}}>Edit</button>
                         </div>
                         <div style={{display:'flex', alignItems:'center', gap:6}}>
-                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Mark this item as closed?')) onCloseRow(r); }}>Mark closed</button>
+                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} title="IF" onClick={() => setIfRow(r)}>IF</button>
+                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Close this item?')) onCloseRow(r); }}>Close</button>
                           <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Delete this item? This cannot be undone.')) onDeleteRow(r); }}>Delete</button>
                         </div>
                       </div>
@@ -440,9 +821,10 @@ export function UnifiedPositionsTable() {
                       <td colSpan={11}>
                         <div className="grid" style={{gap: 6}}>
                           {r.legs.map((L, i) => {
+                            const rule = ifRules[r.id];
+                            const matchedLegs = matchedLegsOnly(r, c, rule);
                             const t = tickers[L.leg.symbol] || {};
-                            const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
-                            const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
+                            const { bid, ask } = bestBidAsk(t);
                             const mid = midPrice(t);
                             const iv = t?.markIv != null ? Number(t.markIv) : undefined;
                             const dRaw = t?.delta != null ? Number(t.delta) : undefined;
@@ -461,7 +843,8 @@ export function UnifiedPositionsTable() {
                                   borderRadius: 8,
                                   padding: 6,
                                   fontSize: 'calc(1em - 1.5px)',
-                                  ...(L.hidden ? { background: 'rgba(128,128,128,.12)' } : {})
+                                  ...(L.hidden ? { background: 'rgba(128,128,128,.12)' } : {}),
+                                  ...(matchedLegs.has(L.leg.symbol) ? { background: 'rgba(64,64,64,.20)' } : {}),
                                 }}
                               >
                                 <div style={{display:'flex', justifyContent:'space-between', marginBottom: 2}}>
@@ -534,8 +917,7 @@ export function UnifiedPositionsTable() {
                                     }
                                     let ivFromBook: number | undefined;
                                     if (S != null && isFinite(S) && K > 0 && T > 0) {
-                                      const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
-                                      const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
+                                      const { bid, ask } = bestBidAsk(t);
                                       const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
                                       const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
                                       if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) ivFromBook = 0.5 * (ivBid + ivAsk);
@@ -543,7 +925,7 @@ export function UnifiedPositionsTable() {
                                       else if (ivAsk != null && isFinite(ivAsk)) ivFromBook = ivAsk;
                                     }
                                     if (ivFromBook != null && isFinite(ivFromBook)) return (ivFromBook * 100).toFixed(1);
-                                    const S2 = t?.indexPrice != null ? Number(t.indexPrice) : undefined;
+                                    const S2 = t?.indexPrice != null ? Number(t.indexPrice) : spotAny;
                                     const mid2 = mid != null ? Number(mid) : undefined;
                                     if (S2 != null && isFinite(S2) && K > 0 && T > 0 && mid2 != null && isFinite(mid2) && mid2 >= 0) {
                                       const iv = bsImpliedVol(L.leg.optionType, S2, K, T, mid2, rPct / 100);
@@ -558,8 +940,8 @@ export function UnifiedPositionsTable() {
                                   <div style={{gridColumn:4, gridRow:4}}>{th != null ? th.toFixed(3) : '—'}</div>
                                   <div style={{gridColumn:5, gridRow:4}}>{oi != null ? oi : '—'}</div>
                                   <div style={{gridColumn:6, gridRow:4}}>{(() => {
-                                    const spotAny = (() => { for (const LL of r.legs) { const tt = tickers[LL.leg.symbol] || {}; if (tt?.indexPrice != null && isFinite(Number(tt.indexPrice))) return Number(tt.indexPrice); } return undefined; })();
-                                    const S = t?.indexPrice != null ? Number(t.indexPrice) : spotAny;
+                                    const spotAny2 = (() => { for (const LL of r.legs) { const tt = tickers[LL.leg.symbol] || {}; if (tt?.indexPrice != null && isFinite(Number(tt.indexPrice))) return Number(tt.indexPrice); } return undefined; })();
+                                    const S = t?.indexPrice != null ? Number(t.indexPrice) : spotAny2;
                                     const K = Number(L.leg.strike) || 0;
                                     const T = Math.max(0, (Number(L.leg.expiryMs) - Date.now()) / (365 * 24 * 60 * 60 * 1000));
                                     if (!(S != null && isFinite(S) && K > 0 && T > 0)) return '—';
@@ -572,8 +954,7 @@ export function UnifiedPositionsTable() {
                                     const sigmaFromMarkPrice = (markPrice != null && isFinite(markPrice) && markPrice >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, markPrice, rPct / 100) : undefined;
                                     let sigmaFromBook: number | undefined;
                                     {
-                                      const bid = t?.bid1Price != null ? Number(t.bid1Price) : undefined;
-                                      const ask = t?.ask1Price != null ? Number(t.ask1Price) : undefined;
+                                      const { bid, ask } = bestBidAsk(t);
                                       const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
                                       const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
                                       if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) sigmaFromBook = 0.5 * (ivBid + ivAsk);
@@ -643,6 +1024,16 @@ export function UnifiedPositionsTable() {
               } catch {}
             }
           }}
+        />
+      )}
+      {ifRow && (
+        <IfModal
+          title={strategyName(ifRow.legs)}
+          legOptions={ifRow.legs.map(L=>({ symbol: L.leg.symbol, label: `${L.side === 'short' ? 'Short' : 'Long'} · ${L.leg.optionType}${L.leg.strike} × ${L.qty} · ${L.leg.symbol}` }))}
+          initial={ifRules[ifRow.id]}
+          onClose={() => setIfRow(null)}
+          onSave={(rule) => { setIfRules(prev => ({ ...prev, [ifRow.id]: rule })); setIfRow(null); }}
+          evalCondLive={({ scope, legSymbol, cond }) => evalSingleCondLive(ifRow, { scope, legSymbol, cond })}
         />
       )}
       {editId && <EditPositionModal id={editId} onClose={() => setEditId(null)} />}

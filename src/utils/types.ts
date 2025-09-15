@@ -6,12 +6,15 @@ export interface InstrumentInfo {
   optionType: OptionType;
   deliveryTime: number; // ms epoch
   status?: string;
+  settleCoin?: string;
 }
 
 export interface Ticker {
   symbol: string;
   bid1Price?: number;
   ask1Price?: number;
+  obBid?: number; // L1 orderbook best bid
+  obAsk?: number; // L1 orderbook best ask
   markPrice?: number;
   lastPrice?: number;
   price24hPcnt?: number; // proportion (e.g., 0.0123 => 1.23%)

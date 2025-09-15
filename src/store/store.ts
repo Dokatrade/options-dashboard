@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { SpreadPosition, PortfolioSettings, Leg, Position } from '../utils/types';
+import type { SpreadPosition, PortfolioSettings, Position } from '../utils/types';
+import { ensureUsdtSymbol } from '../utils/symbols';
 
 type State = {
   spreads: SpreadPosition[];
@@ -18,6 +19,10 @@ type State = {
   toggleFavoriteSpread: (id: string) => void;
   toggleFavoritePosition: (id: string) => void;
 };
+
+function normalizeLegSymbol<T extends { symbol: string }>(leg: T): T {
+  return { ...leg, symbol: ensureUsdtSymbol(leg.symbol) };
+}
 
 export const useStore = create<State>()(
   persist(
@@ -82,18 +87,18 @@ export const useStore = create<State>()(
               qty,
               note: typeof p?.note === 'string' ? p.note : undefined,
               favorite: typeof p?.favorite === 'boolean' ? p.favorite : undefined,
-              short: {
+              short: normalizeLegSymbol({
                 symbol: String(short?.symbol || ''),
                 strike: Number(short?.strike) || 0,
                 optionType: short?.optionType === 'P' ? 'P' : 'C',
                 expiryMs: Number(short?.expiryMs) || 0,
-              },
-              long: {
+              }),
+              long: normalizeLegSymbol({
                 symbol: String(long?.symbol || ''),
                 strike: Number(long?.strike) || 0,
                 optionType: long?.optionType === 'P' ? 'P' : 'C',
                 expiryMs: Number(long?.expiryMs) || 0,
-              },
+              }),
             } as SpreadPosition;
           }).filter((p) => p.short.symbol && p.long.symbol && p.cEnter >= 0);
 
@@ -103,12 +108,12 @@ export const useStore = create<State>()(
             const closedAt = p?.closedAt != null ? Number(p.closedAt) : undefined;
             const note = typeof p?.note === 'string' ? p.note : undefined;
             const legs = Array.isArray(p?.legs) ? p.legs.map((l: any) => ({
-              leg: {
+              leg: normalizeLegSymbol({
                 symbol: String(l?.leg?.symbol || ''),
                 strike: Number(l?.leg?.strike) || 0,
                 optionType: l?.leg?.optionType === 'P' ? 'P' : 'C',
                 expiryMs: Number(l?.leg?.expiryMs) || 0,
-              },
+              }),
               side: l?.side === 'long' ? 'long' : 'short',
               qty: Number(l?.qty) > 0 ? Number(l.qty) : 1,
               entryPrice: Number(l?.entryPrice) || 0,
@@ -130,6 +135,35 @@ export const useStore = create<State>()(
         }
       }
     }),
-    { name: 'options-dashboard' }
+    {
+      name: 'options-dashboard',
+      version: 2,
+      migrate: (state: any, version) => {
+        if (!state || version >= 2) return state as State;
+        const normalizeLeg = (leg: any) => ({
+          ...leg,
+          symbol: ensureUsdtSymbol(leg?.symbol || ''),
+        });
+        const spreads = Array.isArray(state.spreads)
+          ? state.spreads.map((s: any) => ({
+              ...s,
+              short: normalizeLeg(s?.short || {}),
+              long: normalizeLeg(s?.long || {}),
+            }))
+          : state.spreads;
+        const positions = Array.isArray(state.positions)
+          ? state.positions.map((p: any) => ({
+              ...p,
+              legs: Array.isArray(p?.legs)
+                ? p.legs.map((l: any) => ({
+                    ...l,
+                    leg: normalizeLeg(l?.leg || {}),
+                  }))
+                : p?.legs,
+            }))
+          : state.positions;
+        return { ...state, spreads, positions } as State;
+      }
+    }
   )
 );

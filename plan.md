@@ -1,6 +1,14 @@
 # Build Plan — ETH Options Position Dashboard (MVP+)
 
-This plan reflects the current implementation (verticals + multi-leg) and proposes concrete next steps. It’s structured by milestones with acceptance and file layout.
+This plan reflects the current implementation (verticals + multi-leg) and proposes concrete next steps. **Все интеграции Bybit выполняем по USDT-settled ETH опционам (REST/WS)**. It’s structured by milestones with acceptance and file layout.
+
+---
+
+## Change Log — 2025-09-13
+
+- Переведены все REST/WS вызовы Bybit на USDT-settled опционы (`settleCoin=USDT`, `quoteCoin=USDT`), фильтруем символы `…-USDT` для расчёта greeks/прайсов.
+- Введён нормализатор `ensureUsdtSymbol` и миграция Zustand `version=2`, чтобы автоматически обновить сохранённые спрэды/позиции со старых `…-USDC` символов.
+- UI-потоки (Add Position, драфты, автодобавление страйков) гарантируют оформление символов с суффиксом `-USDT`.
 
 ---
 
@@ -190,13 +198,14 @@ onChange(xZoom|yZoom|timePos|ivShift|rPct|showT0|showExpiry):
 **Tasks**
 1. REST wrapper (axios + interceptors, base URL, error mapping)
 2. Endpoints:
-   - `/v5/market/instruments-info?category=option&baseCoin=ETH`
-   - `/v5/market/tickers?category=option&baseCoin=ETH[&expDate=…]`
-   - `/v5/market/orderbook?category=option&symbol=…&limit=25` (optional)
-   - `/v5/market/historical-volatility?category=option&baseCoin=ETH&period=30`
+   - `/v5/market/instruments-info?category=option&baseCoin=ETH&settleCoin=USDT&quoteCoin=USDT`
+   - `/v5/market/tickers?category=option&baseCoin=ETH&settleCoin=USDT&quoteCoin=USDT[&expDate=…]`
+   - `/v5/market/orderbook?category=option&symbol=…&settleCoin=USDT&quoteCoin=USDT&limit=25` (optional)
+   - `/v5/market/historical-volatility?category=option&baseCoin=ETH&settleCoin=USDT&quoteCoin=USDT&period=30`
 3. Normalizers to `Leg`; compute `mid` on ingest
 4. Public WS client for tickers; subscription per symbol
 5. In-memory cache: last tick per symbol
+6. Символьный нормализатор `ensureUsdtSymbol` и миграции локальных данных, чтобы legacy `…-USDC` записи автоматически переводились в `…-USDT`
 
 **Acceptance**
 - Fetch chain for chosen expiry; log legs with greeks/IV

@@ -1,7 +1,14 @@
 # PRD — ETH Options Position Dashboard (MVP+)
 
 ## 1) Summary
-Single-page local web app to monitor and manage ETH options on Bybit. Supports PUT/CALL vertical credit spreads and multi-leg positions (e.g., calendars). Shows market context, live quotes/greeks (WS), unified positions with PnL/greeks/liquidity, payoff for verticals, portfolio aggregates. Public Bybit REST/WS only; user provides entry and qty; local persistence.
+Single-page local web app to monitor and manage ETH options on Bybit. **Все опционные данные берём только по USDT-settled контрактам**. Supports PUT/CALL vertical credit spreads and multi-leg positions (e.g., calendars). Shows market context, live quotes/greeks (WS), unified positions with PnL/greeks/liquidity, payoff for verticals, portfolio aggregates. Public Bybit REST/WS only; user provides entry and qty; local persistence.
+
+---
+
+## Recent Updates (2025-09-13)
+- Миграция на USDT-settled опционы Bybit: REST и WS запросы добавляют `settleCoin=USDT`/`quoteCoin=USDT`, локально фильтруем символы `…-USDT`.
+- Добавлен нормализатор `ensureUsdtSymbol` и миграция Zustand `version=2`, автоматически переводящие старые сохранённые символы `…-USDC`/без суффикса в формат `…-USDT`.
+- UI (драфты, дополнительные страйки из тикеров) дописывает суффикс `-USDT`, все greeks/PnL теперь считаются по USDT данным.
 
 ---
 
@@ -157,7 +164,44 @@ Single-page local web app to monitor and manage ETH options on Bybit. Supports P
 - Legs: L ∈ {1..N}, у каждой: side ∈ {long,short}, type ∈ {C,P}, strike K, expiry t_exp, qty q, entryPrice e.
 - Знак позиции: sign(L) = +1 для short, −1 для long.
 - Год: Year = 365×24×60×60×1000 мс.
-- Сотые доли: IV в процентах переводится в σ = IV/100.
+  - Сотые доли: IV в процентах переводится в σ = IV/100.
+
+---
+
+## Project proposals — 2025-09-15
+
+### Сильные стороны
+- Четкая предметная область: локальное SPA для ETH‑опционов (Bybit) с ясной моделью данных (спреды, многоногие позиции) и локальной персистентностью.
+- Зрелая архитектура фронтенда: React + TypeScript + Vite, Zustand с persist; понятное разделение слоев (services/store/components/utils), dev‑proxy в Vite.
+- Богатая функциональность: Market (Spot/ATM IV/HV30/DTE), добавление вертикалей и произвольных конструкций, фильтры по Δ/OI/спреду, перп; единая таблица позиций (PnL/greeks, бэйдж ликвидности, избранное, сортировки, экспорт CSV); единый View‑модал с payoff/T+0, якорением к фактическому PnL, тайм‑слайдером, сдвигом IV и r, зумом и пер‑позиционной персистентностью.
+- Устойчивость к «дырам» в данных: аккуратный merge WS/REST без затирания валидных значений; расчет IV несколькими путями (markIv → из markPrice → bid/ask → mid → HV30).
+- Внутренние алгоритмы: BS‑утилиты (цена/iv), детектор стратегий, расчет ликвидности и Δσ, корректные формулы PnL/extrema.
+- Документация: README, PRD и план развития с зафиксированными обновлениями.
+
+### Слабые стороны
+- Отсутствуют тесты и статический анализ в CI: нет unit‑тестов для bs/iv/детектора, нет ESLint/Prettier/линтинга и автоматических проверок.
+- Крупные компоненты и дублирование вычислительной логики (iv, dSigma, PnL) между таблицей и модалом; расчеты стоит вынести в `utils`/hooks для переиспользования и тестируемости.
+- Производительность при масштабе: множество WS‑подписок и периодические REST‑опросы; нет виртуализации таблиц; возможны лишние перерендеры.
+- Портфельные агрегаты неполны: `PortfolioSummary` считает MaxLoss только по вертикалям, тогда как основная таблица объединяет vertical и multi‑leg — возможна путаница.
+- Обработка ошибок/UX: WS/REST ошибки часто «молчат», мало скелетонов и явных статусов соединения.
+- Типизация ответов Bybit местами ослаблена (any/свободные мапы); можно усилить типы и нормализацию.
+- Стайлинг базовый (инлайн‑стили), что усложнит дальнейшее масштабирование тем/адаптива.
+
+### Прогноз развития
+- Короткий горизонт (1–2 спринта)
+  - Вынести расчеты PnL/IV/Δσ/liq/extrema/BE в `utils`, покрыть unit‑тестами; синхронизировать использование между таблицей и модалом.
+  - Привести портфельные агрегаты к единой модели (учет multi‑leg, пометки unbounded profit/loss).
+  - Оптимизировать подписки и обновления стейта: дедуп символов, батч‑мердж, мемуизация; рассмотреть React Query для REST‑кэша.
+  - Улучшить UX ошибок/загрузки: скелетоны, видимые статусы (WS/REST/Disconnected/Retry).
+- Средний горизонт
+  - История сделок/закрытий, экспорт/импорт с версионированием; IndexedDB для объемных локальных данных.
+  - Виртуализация таблиц, профилирование рендера; декомпозиция крупных компонентов, lazy‑chunks.
+  - IF‑правила/алерты в фоне: локальные нотификации, подсветка ног/позиций; пресеты правил.
+  - Расширение унификации: поддержка других базовых активов (напр. BTC), выбор баз/локализация.
+- Дальний горизонт
+  - What‑if/стресс‑тесты портфеля (сдвиги IV/Spot), рекомендации роллов.
+  - Опциональный бэкенд: серверный кэш рын. данных/агрегации, мульти‑устройства и шаринг, сохраняя оффлайн‑режим.
+
 
 ### 8.2 Базовые функции
 - BS(type,S,K,T,σ,r): Black–Scholes цена call/put (см. utils/bs.ts).
@@ -408,3 +452,39 @@ Roll down & out: совместите оба — ниже и дальше по �
 - Is a backtest “emulator” mode with historical data needed, or are live feeds enough?
 - Do we need Telegram/Email alerts (hard locally; webhook in v2)?
 - Preferred backend stack (Node vs Python)?
+
+---
+
+## Project Proposals — 2025-09-15 (EN)
+
+### Strengths
+- Clear domain focus: local SPA for ETH options (Bybit) with a clean data model (verticals and multi‑leg) and local persistence.
+- Solid frontend architecture: React + TypeScript + Vite, Zustand with persist; clean layering (services/store/components/utils) and Vite dev proxy.
+- Rich features: Market (Spot/ATM IV/HV30/DTE), creating verticals and arbitrary multi‑leg positions, Δ/OI/spread filters, perp legs; unified positions table (PnL/greeks, liquidity badge, favorites, sorting, CSV export); unified View modal with payoff/T+0, anchoring to actual PnL, time slider, IV and r controls, mouse zoom, per‑position persistence.
+- Resilient data pipeline: careful WS/REST merge without clobbering valid values; multi‑path IV derivation (markIv → from markPrice → bid/ask → mid → HV30).
+- Strong internals: BS pricing utilities (price/IV), strategy detector, liquidity and Δσ metrics, correct PnL/extrema math.
+- Good docs: README, PRD, and a build plan with recorded updates.
+
+### Weaknesses
+- No tests or CI linting: missing unit tests for bs/iv/strategy detector; no ESLint/Prettier or automated checks.
+- Large components and duplicated compute logic (IV, dSigma, PnL) across table and modal; should extract to `utils`/hooks for reuse and testability.
+- Scalability/performance: many WS subscriptions plus periodic REST polling; no table virtualization; potential extra re‑renders.
+- Portfolio aggregates are partial: `PortfolioSummary` computes MaxLoss only for verticals, while the main table mixes vertical and multi‑leg — totals can be misleading.
+- Error/UX handling: WS/REST failures are often silent; few skeletons and explicit connection/status indicators.
+- Bybit response typing is loose in places (any/maps); strengthen types and normalization.
+- Basic styling (inline styles) will hinder future theming/adaptive work.
+
+### Development Outlook
+- Short term (1–2 sprints)
+  - Extract PnL/IV/Δσ/liq/extrema/BE to `utils` and add unit tests; unify usage between table and modal.
+  - Align portfolio aggregates to a single model (support multi‑leg; annotate unbounded profit/loss).
+  - Optimize subscriptions/state updates: symbol dedup, batched merges, memoization; consider React Query for REST caching.
+  - Improve error/loading UX: skeletons and visible statuses (WS/REST/Disconnected/Retry).
+- Mid term
+  - Trade/close history, export/import with versioning; IndexedDB for larger local datasets.
+  - Table virtualization and render profiling; split large components, lazy chunks.
+  - IF rules/alerts running in background: local notifications, leg/position highlighting; presets.
+  - Broaden scope: support other underlyings (e.g., BTC), base selection, localization.
+- Long term
+  - What‑if/stress testing (IV/Spot shifts), roll recommendations.
+  - Optional backend: server cache for market data/aggregations, multi‑device sync and sharing, while keeping offline mode.

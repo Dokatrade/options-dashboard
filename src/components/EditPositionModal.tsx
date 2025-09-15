@@ -1,6 +1,6 @@
 import React from 'react';
 import { useStore } from '../store/store';
-import { fetchInstruments, fetchOptionTickers, midPrice } from '../services/bybit';
+import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk } from '../services/bybit';
 import { subscribeOptionTicker } from '../services/ws';
 import type { Position, InstrumentInfo, Leg, OptionType } from '../utils/types';
 
@@ -168,7 +168,7 @@ export function EditPositionModal({ id, onClose }: Props) {
               <select value={symbol} onChange={(e)=>setSymbol(e.target.value)} disabled={!expiry}>
                 <option value="">Select strike</option>
                 {chain.map(i=>{
-                  const t = tickers[i.symbol]||{}; const m = midPrice(t); const b=t?.bid1Price, a=t?.ask1Price;
+                  const t = tickers[i.symbol]||{}; const m = midPrice(t); const { bid: b, ask: a } = bestBidAsk(t);
                   const label = `${i.strike} — ${m!=null? '$'+m.toFixed(2): (b!=null&&a!=null? `$${Number(b).toFixed(2)}/${Number(a).toFixed(2)}`:'—')}`;
                   return <option key={i.symbol} value={i.symbol}>{label}</option>;
                 })}

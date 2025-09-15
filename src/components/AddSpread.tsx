@@ -1,5 +1,5 @@
 import React from 'react';
-import { fetchInstruments, fetchOptionTickers, midPrice } from '../services/bybit';
+import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk, fetchOrderbookL1 } from '../services/bybit';
 import { subscribeOptionTicker } from '../services/ws';
 import { useStore } from '../store/store';
 import type { InstrumentInfo, Leg, OptionType } from '../utils/types';
@@ -45,6 +45,24 @@ export function AddSpread() {
     });
     return () => { m = false; };
   }, []);
+
+  // REST L1 fallback for visible chains
+  React.useEffect(() => {
+    let stopped = false;
+    const poll = async () => {
+      const syms = Array.from(new Set([...chainShort, ...chainLong].map(i => i.symbol))).slice(0, 200);
+      for (const sym of syms) {
+        if (stopped) return;
+        try {
+          const { bid, ask } = await fetchOrderbookL1(sym);
+          if (bid != null || ask != null) setTickers(prev => ({ ...prev, [sym]: { ...(prev[sym] || {}), obBid: bid, obAsk: ask } }));
+        } catch {}
+      }
+    };
+    poll();
+    const id = setInterval(poll, 8000);
+    return () => { stopped = true; clearInterval(id); };
+  }, [chainShort, chainLong]);
 
   // Live preview via WS for selected legs
   React.useEffect(() => {
@@ -166,7 +184,7 @@ export function AddSpread() {
             <option value="">Select short</option>
             {chainShort.map((i) => {
               const t = tickers[i.symbol];
-              const b = t?.bid1Price, a = t?.ask1Price;
+              const { bid: b, ask: a } = bestBidAsk(t);
               const mid = midPrice(t);
               const label = Number.isFinite(i.strike)
                 ? `${i.strike} — ${mid != null ? '$'+mid.toFixed(2) : (b!=null && a!=null ? `$${b.toFixed(2)}/${a.toFixed(2)}` : '—')}`
@@ -181,7 +199,7 @@ export function AddSpread() {
             <option value="">Select long</option>
             {chainLong.map((i) => {
               const t = tickers[i.symbol];
-              const b = t?.bid1Price, a = t?.ask1Price;
+              const { bid: b, ask: a } = bestBidAsk(t);
               const mid = midPrice(t);
               const label = Number.isFinite(i.strike)
                 ? `${i.strike} — ${mid != null ? '$'+mid.toFixed(2) : (b!=null && a!=null ? `$${b.toFixed(2)}/${a.toFixed(2)}` : '—')}`
