@@ -261,7 +261,7 @@ export function AddPosition() {
         qty: d.qty,
         entryPrice: midPrice(tickers[d.leg.symbol]) ?? 0
       }));
-      addPosition({ legs, note: 'Multi-leg position' });
+      addPosition({ legs, note: 'Custom position' });
       setDraft([]);
       setStrike('');
     }

@@ -3,6 +3,7 @@ import { useStore } from '../store/store';
 import { fetchOptionTickers, midPrice, bestBidAsk } from '../services/bybit';
 import { subscribeTicker } from '../services/ws';
 import { PositionView } from './PositionView';
+import { EditPositionModal } from './EditPositionModal';
 
 type RowCalc = {
   priceNow?: number;
@@ -58,6 +59,7 @@ export function SpreadTable() {
   const [err, setErr] = React.useState<string | null>(null);
   const [viewId, setViewId] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
+  const [editId, setEditId] = React.useState<string | null>(null);
 
 
   // Initial fetch once, then WS live updates
@@ -234,6 +236,15 @@ export function SpreadTable() {
             note={pos.note}
             title={title}
             onClose={() => setViewId(null)}
+            onEdit={() => {
+              setViewId(null);
+              try {
+                addPosition({ legs, note: pos.note });
+                const latest = useStore.getState().positions?.[0]?.id;
+                remove(pos.id);
+                if (latest) setEditId(latest);
+              } catch {}
+            }}
             onToggleLegHidden={(sym) => {
               try {
                 addPosition({ legs, note: pos.note });
@@ -249,6 +260,7 @@ export function SpreadTable() {
           />
         );
       })()}
+      {editId && <EditPositionModal id={editId} onClose={() => setEditId(null)} />}
     </div>
   );
 }

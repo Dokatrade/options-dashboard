@@ -12,9 +12,10 @@ type Props = {
   onClose: () => void;
   onToggleLegHidden?: (symbol: string) => void;
   hiddenSymbols?: string[];
+  onEdit?: () => void;
 };
 
-export function PositionView({ legs, createdAt, note, title, onClose, onToggleLegHidden, hiddenSymbols }: Props) {
+export function PositionView({ legs, createdAt, note, title, onClose, onToggleLegHidden, hiddenSymbols, onEdit }: Props) {
   const legsCalc = React.useMemo(() => {
     const hiddenSet = new Set(hiddenSymbols || []);
     return legs.filter(L => !hiddenSet.has(L.leg.symbol));
@@ -553,7 +554,9 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                 if (!expiries.length) return 'DTE: —';
                 const tNow = Date.now();
                 const latest = Math.max(...expiries);
-                const targetTime = tNow + effTimePos * Math.max(0, latest - tNow);
+                const start = Math.min(createdAt || tNow, latest);
+                const total = Math.max(1, latest - start);
+                const targetTime = start + effTimePos * total;
                 const ds = expiries.map(ms => Math.max(0, Math.round((ms - targetTime) / 86_400_000)));
                 const d = ds.length ? Math.max(...ds) : 0; // show remaining to latest expiry at target time
                 return `DTE: ${d}d`;
@@ -766,7 +769,18 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
 
           {/* Zoom controls removed by request; default X zoom set to 0.5 */}
 
-          <div className="grid" style={{gridTemplateColumns:'repeat(10, minmax(90px, max-content))', gap:3, marginBottom: 6, fontSize:'calc(1em - 2px)'}}>
+          <div className="grid" style={{gridTemplateColumns:'repeat(11, minmax(80px, max-content))', columnGap:6, rowGap:2, marginBottom: 6, fontSize:'calc(1em - 2px)'}}>
+            <div style={{gridColumn:'1 / -1', display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12, flexWrap:'wrap', marginBottom:12}}>
+              <div style={{minWidth:0}}>
+                <div className="muted">Position</div>
+                <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
+                  <div style={{fontWeight:600, whiteSpace:'normal', overflowWrap:'anywhere'}}>{title || '—'}</div>
+                  {onEdit && (
+                    <button className="ghost" onClick={onEdit} style={{flexShrink:0}}>Edit</button>
+                  )}
+                </div>
+              </div>
+            </div>
             {/* Core meta */}
             <div><div className="muted">Created</div><div>{new Date(createdAt).toISOString().slice(0,10)}</div></div>
             <div><div className="muted">DTE</div><div>{calc.dteLabel}</div></div>
@@ -792,12 +806,25 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
             {/* Net figures moved up to align with Width */}
             <div><div className="muted">Net entry</div><div>{calc.netEntry.toFixed(2)}</div></div>
             <div><div className="muted">Net mid</div><div>{calc.netMid.toFixed(2)}</div></div>
+            <div><div className="muted">Kmid</div><div>{(() => {
+              const ratio = calc.netEntry !== 0 ? calc.netMid / calc.netEntry : undefined;
+              const value = ratio != null && isFinite(ratio) ? ratio.toFixed(2) : '—';
+              let style: React.CSSProperties | undefined;
+              if (ratio != null && isFinite(ratio)) {
+                if (ratio <= 1.5) style = { color: '#1b8a4d', fontWeight: 600 };
+                else if (ratio <= 1.7) style = { color: '#c98f09', fontWeight: 600 };
+                else if (ratio <= 2) style = { color: '#d77c1f', fontWeight: 600 };
+                else style = { color: '#c0392b', fontWeight: 600 };
+              } else {
+                style = { fontWeight: 600 };
+              }
+              return <span style={style}>{value}</span>;
+            })()}</div></div>
             <div><div className="muted">PnL ($)</div><div>{calc.pnl.toFixed(2)}</div></div>
             {/* Greeks after net figures */}
             <div><div className="muted">Δ (Delta)</div><div>{calc.greeks.delta.toFixed(3)}</div></div>
             <div><div className="muted">Vega</div><div>{calc.greeks.vega.toFixed(3)}</div></div>
             <div><div className="muted">Θ (Theta)</div><div>{calc.greeks.theta.toFixed(3)}</div></div>
-            {note && <div style={{gridColumn:'1 / -1'}}><div className="muted">Note</div><div>{note}</div></div>}
           </div>
 
           <div className="grid" style={{gap: 6}}>
@@ -807,12 +834,12 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                   <div style={{display:'flex', alignItems:'center', gap:8}}>
                     {onToggleLegHidden && (
                       <button type="button" className="ghost" style={{height: 22, lineHeight: '22px', padding: '0 8px', cursor:'pointer', position:'relative', zIndex:2}} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleLegHidden?.(L.leg.symbol); }}>
-                        {isHidden ? 'Unhide' : 'Hide'}
+                          {isHidden ? 'Unhide' : 'Hide'}
                       </button>
                     )}
                     <div style={{fontSize:'calc(1em + 2px)'}}><strong>{L.side}</strong> {L.leg.optionType} {L.leg.strike} × {L.qty}</div>
                   </div>
-                  <div className="muted" style={{fontSize:'calc(1em + 2px)'}}>{new Date(L.leg.expiryMs).toISOString().slice(0,10)}</div>
+                  <div className="muted" style={{fontSize:'calc(1em + 2px)'}}>{Number(L.leg.expiryMs) > 0 ? new Date(Number(L.leg.expiryMs)).toISOString().slice(0,10) : ''}</div>
                 </div>
                 {/* Grid 6x4; first column: row 1 label, rows 2-4 merged value centered */}
                 <div className="grid" style={{gridTemplateColumns:'2fr repeat(5, minmax(0,1fr))', gridTemplateRows:'repeat(4, auto)', gap: 6}}>

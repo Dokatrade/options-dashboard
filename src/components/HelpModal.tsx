@@ -23,13 +23,13 @@ export function HelpModal({ onClose }: Props) {
             <li>Откройте <em>Add Position</em>. Выберите <strong>Type</strong> (PUT/CALL), <strong>Expiry</strong>, затем <strong>Option</strong> со списком страйков и живой ценой.</li>
             <li>Укажите <strong>Volume (qty)</strong> с шагом 0.1 и нажмите <strong>Add Short</strong> или <strong>Add Long</strong> — нога добавится в <em>Position builder</em>.</li>
             <li>Соберите 2 ноги одинаковой экспирации и противоположных сторон — можно сохранить как <strong>вертикальный спред</strong>.</li>
-            <li>Любую другую комбинацию сохраните как <strong>multi‑leg позицию</strong>.</li>
+            <li>Любую другую комбинацию сохраните как <strong>combo позицию</strong>.</li>
             <li>Черновик билдерa <strong>автосохраняется</strong> и переживает перезагрузку; кнопка <em>Clear draft</em> его очищает.</li>
           </ul>
 
           <p><strong>My Positions (единая таблица)</strong></p>
           <ul>
-            <li><strong>Type</strong>: Vertical или Multi‑leg (определяется автоматически).</li>
+            <li><strong>Type</strong>: Vertical или Combo (определяется автоматически).</li>
             <li><strong>Net entry / Net mid / PnL</strong>: суммы по всем ногам с учетом знака стороны и <strong>qty</strong>.</li>
             <li><strong>Greeks (Δ/Γ/Vega/Θ)</strong>: суммирование по ногам; для коротких ног знак инвертируется.</li>
             <li><strong>Liquidity</strong>: максимальный bid‑ask спред по ногам и минимальный OI. Данные берутся из WS; если отсутствуют — подкачиваются из REST.</li>
@@ -47,10 +47,10 @@ export function HelpModal({ onClose }: Props) {
               <div className="muted" style={{marginTop:4}}>Для многоногих конструкций оценка считается по <strong>всем</strong> ногам: берём самое «узкое место» — наибольший spread% среди ног и наименьший OI. Если по части ног нет котировок (bid/ask или OI), бэйдж может понизиться из‑за неполных данных.</div>
             </li>
             <li><strong>Vertical extras</strong>: для вертикалей показываются <em>Width</em>, <em>MaxLoss</em> (с учетом qty) и <em>DTE</em>.</li>
-            <li><strong>Действия</strong>: View (для вертикалей, payoff‑график), Edit (для multi‑leg), Mark closed, Delete, Export CSV.</li>
+            <li><strong>Действия</strong>: View (для вертикалей, payoff‑график), Edit (для combo), Mark closed, Delete, Export CSV.</li>
           </ul>
 
-          <p><strong>Edit (multi‑leg)</strong></p>
+          <p><strong>Edit (combo)</strong></p>
           <ul>
             <li>Меняйте <strong>qty</strong> каждой ноги (шаг 0.1) и удаляйте лишние ноги.</li>
             <li><strong>Add leg</strong>: добавляйте новые ноги по Type/Expiry/Option; <em>entryPrice</em> берётся по текущему mid.</li>
@@ -119,7 +119,7 @@ export function HelpModal({ onClose }: Props) {
           <p><strong>Сохранение и экспорт</strong></p>
           <ul>
             <li>Все данные пользователя хранятся локально (localStorage). Бэкап: <strong>Export/Import JSON</strong> в Portfolio.</li>
-            <li>В My Positions доступен <strong>Export CSV</strong> текущего списка (включая multi‑leg).</li>
+            <li>В My Positions доступен <strong>Export CSV</strong> текущего списка (включая combo).</li>
           </ul>
 
           <p className="muted"><strong>Важно</strong>: инструмент учебный и не является инвестрекомендацией. Проверяйте котировки и расчёты на бирже перед действиями. Волатильность, проскальзывание и ликвидность могут существенно влиять на результаты.</p>

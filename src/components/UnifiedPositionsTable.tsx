@@ -149,6 +149,22 @@ export function UnifiedPositionsTable() {
   // Real spot for IF-only calculations
   const [ifSpot, setIfSpot] = React.useState<number | undefined>();
 
+  const openEditRow = React.useCallback((target: Row) => {
+    if (!target) return;
+    if (target.id.startsWith('P:')) {
+      setEditId(target.id.slice(2));
+      return;
+    }
+    if (target.id.startsWith('S:')) {
+      try {
+        addPosition({ legs: target.legs, note: target.note });
+        const latest = useStore.getState().positions?.[0]?.id;
+        removeSpread(target.id.slice(2));
+        if (latest) setEditId(latest);
+      } catch {}
+    }
+  }, [addPosition, removeSpread]);
+
   // Load persisted UI prefs
   React.useEffect(() => {
     try {
@@ -383,6 +399,12 @@ export function UnifiedPositionsTable() {
       case 'spot': return ctx.spot;
       case 'netEntry': return ctx.calc.netEntry;
       case 'netMid': return ctx.calc.netMid;
+      case 'kmid': {
+        const entry = ctx.calc.netEntry;
+        if (!(entry != null && isFinite(entry) && Math.abs(entry) > 1e-12)) return undefined;
+        const ratio = ctx.calc.netMid / entry;
+        return Number.isFinite(ratio) ? ratio : undefined;
+      }
       case 'pnl': return ctx.calc.pnl;
       case 'pnlPctMax': {
         const mp = ensureMaxProfit(ctx);
@@ -908,20 +930,7 @@ export function UnifiedPositionsTable() {
                           }}>{r.favorite ? '★' : '☆'}</button>
                           <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 6px', fontSize: 28}} title={expanded[r.id] ? 'Hide legs' : 'Show legs'} onClick={() => setExpanded(prev => ({ ...prev, [r.id]: !prev[r.id] }))}>{expanded[r.id] ? '▴' : '▾'}</button>
                           <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => setView(r)}>View</button>
-                          <button className="ghost" onClick={() => {
-                            if (r.kind === 'multi') {
-                              setEditId(r.id.slice(2));
-                            } else {
-                              // Convert vertical row into editable multi-leg position
-                              try {
-                                addPosition({ legs: r.legs, note: r.note });
-                                const latest = useStore.getState().positions?.[0]?.id;
-                                // Remove original spread so item becomes editable multi-leg entry
-                                removeSpread(r.id.slice(2));
-                                if (latest) setEditId(latest);
-                              } catch {}
-                            }
-                          }} style={{height: 28, lineHeight: '28px', padding: '0 10px'}}>Edit</button>
+                          <button className="ghost" onClick={() => openEditRow(r)} style={{height: 28, lineHeight: '28px', padding: '0 10px'}}>Edit</button>
                         </div>
                         <div style={{display:'flex', alignItems:'center', gap:6}}>
                           <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} title="IF" onClick={() => setIfRow(r)}>IF</button>
@@ -989,7 +998,7 @@ export function UnifiedPositionsTable() {
                                     }}>{L.hidden ? 'Unhide' : 'Hide'}</button>
                                     <div><strong>{L.side}</strong> {L.leg.optionType} {L.leg.strike} × {L.qty}</div>
                                   </div>
-                                  <div className="muted">{new Date(L.leg.expiryMs).toISOString().slice(0,10)}</div>
+                                  <div className="muted">{Number(L.leg.expiryMs) > 0 ? new Date(Number(L.leg.expiryMs)).toISOString().slice(0,10) : ''}</div>
                                 </div>
                                 <div className="grid" style={{gridTemplateColumns:'2fr repeat(5, minmax(0,1fr))', gridTemplateRows:'repeat(4, auto)', gap: 6}}>
                                   {/* First column header (row 1) */}
@@ -1106,6 +1115,12 @@ export function UnifiedPositionsTable() {
           title={strategyName(view.legs)}
           onClose={() => setView(null)}
           hiddenSymbols={view.legs.filter(L=>L.hidden).map(L=>L.leg.symbol)}
+          onEdit={() => {
+            const current = view;
+            if (!current) return;
+            setView(null);
+            openEditRow(current);
+          }}
           onToggleLegHidden={(sym) => {
             if (view.id.startsWith('P:')) {
               const pid = view.id.slice(2);
@@ -1174,18 +1189,141 @@ export function UnifiedPositionsTable() {
   const netEntryFor = (legs: PositionLeg[]) => legs.filter(L=>!L.hidden).reduce((a, L) => a + (L.side === 'short' ? 1 : -1) * (Number(L.entryPrice) || 0) * (Number(L.qty) || 1), 0);
 
   const strategyName = (legs: PositionLeg[]): string => {
-    legs = legs.filter(L=>!L.hidden);
-    if (!legs.length) return '—';
-    const Ls = legs.map(l => ({ side: l.side, type: l.leg.optionType, exp: l.leg.expiryMs, k: l.leg.strike, qty: l.qty }));
+    const active = legs.filter(L => !L.hidden);
+    if (!active.length) return '—';
+
+    type NormalizedLeg = {
+      side: 'long' | 'short';
+      type: 'C' | 'P';
+      exp: number;
+      k: number;
+      qty: number;
+      isUnderlying: boolean;
+      symbol: string;
+    };
+
+    const norm: NormalizedLeg[] = active.map(l => {
+      const symbol = String(l.leg.symbol || '');
+      const exp = Number(l.leg.expiryMs) || 0;
+      const isUnderlying = !symbol.includes('-') || exp <= 0;
+      return {
+        side: l.side,
+        type: l.leg.optionType,
+        exp,
+        k: Number(l.leg.strike) || 0,
+        qty: Number(l.qty) || 0,
+        isUnderlying,
+        symbol,
+      };
+    });
+
     const tol = 1e-6;
     const same = (a: number, b: number) => Math.abs(a - b) <= tol;
+    const approx = (a: number, b: number) => Math.abs(a - b) <= Math.max(0.01, 0.02 * Math.max(Math.abs(a), Math.abs(b)));
+    const absQty = (leg: NormalizedLeg) => Math.abs(Number(leg.qty) || 0);
+    const sumAbs = (arr: NormalizedLeg[]) => arr.reduce((acc, x) => acc + absQty(x), 0);
+    const net = netEntryFor(active);
+
+    const optionLegs = norm.filter(l => !l.isUnderlying);
+    const underlyingLegs = norm.filter(l => l.isUnderlying);
+
+    if (!optionLegs.length && underlyingLegs.length) {
+      if (underlyingLegs.length === 1) return underlyingLegs[0].side === 'long' ? 'Long Underlying' : 'Short Underlying';
+      const longQty = sumAbs(underlyingLegs.filter(l => l.side === 'long'));
+      const shortQty = sumAbs(underlyingLegs.filter(l => l.side === 'short'));
+      if (approx(longQty, shortQty) && longQty > 0) return 'Hedged Underlying Pair';
+      return 'Underlying Combo';
+    }
+
+    const coverageOK = (coverQty: number, optionQty: number) => {
+      if (!(optionQty > 0)) return true;
+      const slack = Math.max(0.01, 0.05 * optionQty);
+      return coverQty + slack >= optionQty;
+    };
+
+    if (underlyingLegs.length) {
+      const longUnderQty = sumAbs(underlyingLegs.filter(l => l.side === 'long'));
+      const shortUnderQty = sumAbs(underlyingLegs.filter(l => l.side === 'short'));
+
+      const qtyMatches = (legsToCheck: NormalizedLeg[], target: number) => legsToCheck.every(l => coverageOK(target, absQty(l)));
+
+      if (longUnderQty > 0 && !shortUnderQty) {
+        const shortCalls = optionLegs.filter(l => l.type === 'C' && l.side === 'short');
+        const otherOpts = optionLegs.filter(l => !(l.type === 'C' && l.side === 'short'));
+        if (shortCalls.length && !otherOpts.length) {
+          const totalShortCalls = sumAbs(shortCalls);
+          if (coverageOK(longUnderQty, totalShortCalls)) return shortCalls.length === 1 ? 'Covered Call' : 'Covered Calls';
+        }
+        if (optionLegs.length === 1) {
+          const opt = optionLegs[0];
+          if (coverageOK(longUnderQty, absQty(opt))) {
+            if (opt.type === 'C' && opt.side === 'short') return 'Covered Call';
+            if (opt.type === 'P' && opt.side === 'long') return 'Protective Put';
+          }
+        }
+        if (optionLegs.length === 2) {
+          const shortCalls = optionLegs.filter(l => l.type === 'C' && l.side === 'short');
+          const longPuts = optionLegs.filter(l => l.type === 'P' && l.side === 'long');
+          const shortPuts = optionLegs.filter(l => l.type === 'P' && l.side === 'short');
+          const longCalls = optionLegs.filter(l => l.type === 'C' && l.side === 'long');
+          if (shortCalls.length === 1 && longPuts.length === 1 && qtyMatches([shortCalls[0], longPuts[0]], longUnderQty)) {
+            const sameExpiry = same(shortCalls[0].exp, longPuts[0].exp);
+            return sameExpiry ? 'Collar' : 'Diagonal Collar';
+          }
+          if (shortCalls.length === 1 && shortPuts.length === 1 && qtyMatches([shortCalls[0], shortPuts[0]], longUnderQty)) {
+            return 'Covered Strangle';
+          }
+          if (longCalls.length === 1 && longPuts.length === 1 && qtyMatches([longCalls[0], longPuts[0]], longUnderQty)) {
+            return 'Protective Strangle';
+          }
+        }
+      }
+
+      if (shortUnderQty > 0 && !longUnderQty) {
+        const shortPuts = optionLegs.filter(l => l.type === 'P' && l.side === 'short');
+        const otherOpts = optionLegs.filter(l => !(l.type === 'P' && l.side === 'short'));
+        if (shortPuts.length && !otherOpts.length) {
+          const totalShortPuts = sumAbs(shortPuts);
+          if (coverageOK(shortUnderQty, totalShortPuts)) return shortPuts.length === 1 ? 'Covered Put' : 'Covered Puts';
+        }
+        if (optionLegs.length === 1) {
+          const opt = optionLegs[0];
+          if (coverageOK(shortUnderQty, absQty(opt))) {
+            if (opt.type === 'P' && opt.side === 'short') return 'Covered Put';
+            if (opt.type === 'C' && opt.side === 'long') return 'Protective Call';
+          }
+        }
+        if (optionLegs.length === 2) {
+          const longCalls = optionLegs.filter(l => l.type === 'C' && l.side === 'long');
+          const shortPuts = optionLegs.filter(l => l.type === 'P' && l.side === 'short');
+          const longPuts = optionLegs.filter(l => l.type === 'P' && l.side === 'long');
+          const shortCalls = optionLegs.filter(l => l.type === 'C' && l.side === 'short');
+          if (longCalls.length === 1 && shortPuts.length === 1 && qtyMatches([longCalls[0], shortPuts[0]], shortUnderQty)) {
+            const sameExpiry = same(longCalls[0].exp, shortPuts[0].exp);
+            return sameExpiry ? 'Reverse Collar' : 'Reverse Diagonal Collar';
+          }
+          if (shortCalls.length === 1 && shortPuts.length === 1 && qtyMatches([shortCalls[0], shortPuts[0]], shortUnderQty)) {
+            return 'Covered Short Strangle';
+          }
+          if (longCalls.length === 1 && longPuts.length === 1 && qtyMatches([longCalls[0], longPuts[0]], shortUnderQty)) {
+            return 'Protective Short Strangle';
+          }
+        }
+      }
+
+      if (approx(longUnderQty, shortUnderQty) && longUnderQty > 0) return 'Delta-Neutral Stock Hedge';
+      return 'Stock & Options Combo';
+    }
+
+    const Ls = optionLegs;
+    if (!Ls.length) return 'Custom Strategy';
+
     const allSameExp = Ls.every(x => same(x.exp, Ls[0].exp));
     const allSameType = Ls.every(x => x.type === Ls[0].type);
     const byType = (t: 'C' | 'P') => Ls.filter(x => x.type === t);
     const bySide = (s: 'long' | 'short') => Ls.filter(x => x.side === s);
     const sumQty = (arr: typeof Ls) => arr.reduce((a, x) => a + (Number(x.qty) || 0), 0);
     const sortedByK = (arr: typeof Ls) => [...arr].sort((a, b) => a.k - b.k);
-    const net = netEntryFor(legs);
 
     // 1 leg
     if (Ls.length === 1) {
@@ -1332,5 +1470,5 @@ export function UnifiedPositionsTable() {
     }
 
     if (Ls.length >= 5) return `Complex (${Ls.length} legs)`;
-    return 'Multi‑leg';
+    return 'Options Combo';
   };

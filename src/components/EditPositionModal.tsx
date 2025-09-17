@@ -1,7 +1,7 @@
 import React from 'react';
 import { useStore } from '../store/store';
 import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk } from '../services/bybit';
-import { subscribeOptionTicker } from '../services/ws';
+import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
 import type { Position, InstrumentInfo, Leg, OptionType } from '../utils/types';
 
 type Props = { id: string; onClose: () => void };
@@ -22,6 +22,10 @@ export function EditPositionModal({ id, onClose }: Props) {
   const [rollIdx, setRollIdx] = React.useState<number | ''>('');
   const [rollExpiry, setRollExpiry] = React.useState<number | ''>('');
   const [rollSymbol, setRollSymbol] = React.useState<string>('');
+  const [perpSide, setPerpSide] = React.useState<'short'|'long'>('short');
+  const [perpQty, setPerpQty] = React.useState<number>(1);
+  const [perpUsdTotal, setPerpUsdTotal] = React.useState<number>(0);
+  const [perpMode, setPerpMode] = React.useState<'contracts' | 'usd'>('contracts');
 
   React.useEffect(() => { if (position) setDraft(position.legs); }, [position?.id]);
 
@@ -44,20 +48,27 @@ export function EditPositionModal({ id, onClose }: Props) {
     const symbols = new Set<string>();
     draft.forEach(l => symbols.add(l.leg.symbol));
     chain.forEach(i => symbols.add(i.symbol));
-    const unsubs = Array.from(symbols).slice(0,300).map(sym => subscribeOptionTicker(sym, (t) => setTickers(prev => {
-      const cur = prev[t.symbol] || {};
-      const merged: any = { ...cur };
-      const keys: string[] = Object.keys(t as any);
-      for (const k of keys) {
-        const v: any = (t as any)[k];
-        if (v != null && !(Number.isNaN(v))) (merged as any)[k] = v;
-      }
-      return { ...prev, [t.symbol]: merged };
-    })));
+    symbols.add('ETHUSDT');
+    const unsubs = Array.from(symbols).slice(0,300).map(sym => {
+      const isOption = sym.includes('-');
+      const sub = isOption ? subscribeOptionTicker : subscribeSpotTicker;
+      return sub(sym, (t) => setTickers(prev => {
+        const cur = prev[t.symbol] || {};
+        const merged: any = { ...cur };
+        const keys: string[] = Object.keys(t as any);
+        for (const k of keys) {
+          const v: any = (t as any)[k];
+          if (v != null && !(Number.isNaN(v))) (merged as any)[k] = v;
+        }
+        return { ...prev, [t.symbol]: merged };
+      }));
+    });
     return () => { unsubs.forEach(u => u()); };
   }, [draft, chain]);
 
   if (!position) return null;
+
+  const sideLabel = (s: 'short' | 'long') => (s === 'short' ? 'Short' : 'Long');
 
   const addLeg = () => {
     const inst = chain.find(c => c.symbol === symbol);
@@ -67,6 +78,28 @@ export function EditPositionModal({ id, onClose }: Props) {
     const entryPrice = midPrice(tickers[leg.symbol]) ?? 0;
     setDraft(d => [...d, { leg, side, qty: q, entryPrice }]);
     setSymbol('');
+  };
+
+  const addPerpLeg = () => {
+    const leg: Leg = { symbol: 'ETHUSDT', strike: 0, optionType: 'C', expiryMs: 0 } as any;
+    const ticker = tickers['ETHUSDT'];
+    const midEth = midPrice(ticker);
+    if (perpMode === 'usd') {
+      const usdRaw = Math.abs(Number(perpUsdTotal));
+      const usd = Number.isFinite(usdRaw) ? usdRaw : 0;
+      if (!(usd > 0 && midEth != null && midEth > 0)) return;
+      const qty = Number((usd / midEth).toFixed(4));
+      if (!(qty > 0)) return;
+      setDraft(d => [...d, { leg, side: perpSide, qty, entryPrice: midEth }]);
+      setPerpUsdTotal(0);
+    } else {
+      const qtyRaw = Number(perpQty);
+      const qty = Number.isFinite(qtyRaw) ? Math.max(0.0001, Math.round(qtyRaw * 1000) / 1000) : 0;
+      if (!(qty > 0)) return;
+      const entryPrice = midEth ?? 0;
+      setDraft(d => [...d, { leg, side: perpSide, qty, entryPrice }]);
+      setPerpQty(1);
+    }
   };
 
   const save = () => {
@@ -88,6 +121,21 @@ export function EditPositionModal({ id, onClose }: Props) {
     return instruments.filter(i => i.optionType === rollType && i.deliveryTime === rollExpiry).sort((a,b)=>a.strike-b.strike);
   }, [rollIdx, rollType, rollExpiry, instruments]);
 
+  const midEth = midPrice(tickers['ETHUSDT']);
+  const sanitizedPerpQty = (() => {
+    const val = Number(perpQty);
+    if (!Number.isFinite(val) || val <= 0) return 0;
+    return Math.max(0.0001, val);
+  })();
+  const sanitizedPerpUsd = (() => {
+    const val = Math.abs(Number(perpUsdTotal));
+    if (!Number.isFinite(val) || val <= 0) return 0;
+    return val;
+  })();
+  const canAddPerp = perpMode === 'contracts'
+    ? sanitizedPerpQty > 0
+    : (sanitizedPerpUsd > 0 && midEth != null && midEth > 0);
+
   return (
     <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.45)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:70}}>
       <div style={{background:'var(--card)', color:'var(--fg)', border:'1px solid var(--border)', borderRadius:12, width:900, maxWidth:'95%', maxHeight:'90%', overflow:'auto'}}>
@@ -107,9 +155,12 @@ export function EditPositionModal({ id, onClose }: Props) {
                 <div className="muted">Leg to roll</div>
                 <select value={rollIdx} onChange={(e)=>{ const v = e.target.value; setRollIdx(v===''? '': Number(v)); setRollExpiry(''); setRollSymbol(''); }}>
                   <option value="">Select leg</option>
-                  {draft.map((L, idx)=>(
-                    <option key={idx} value={idx}>{L.side} {L.leg.optionType} {L.leg.strike} · {new Date(L.leg.expiryMs).toISOString().slice(0,10)} × {L.qty}</option>
-                  ))}
+                  {draft.map((L, idx)=>{
+                    if (!L.leg.symbol.includes('-')) return null;
+                    return (
+                      <option key={idx} value={idx}>{sideLabel(L.side)} {L.leg.optionType} {L.leg.strike} · {new Date(L.leg.expiryMs).toISOString().slice(0,10)} × {L.qty}</option>
+                    );
+                  })}
                 </select>
               </label>
               <label>
@@ -177,8 +228,8 @@ export function EditPositionModal({ id, onClose }: Props) {
             <label>
               <div className="muted">Side</div>
               <select value={side} onChange={(e)=>setSide(e.target.value as 'short'|'long')}>
-                <option value="short">short</option>
-                <option value="long">long</option>
+                <option value="short">Short</option>
+                <option value="long">Long</option>
               </select>
             </label>
             <label>
@@ -188,6 +239,66 @@ export function EditPositionModal({ id, onClose }: Props) {
             <div style={{gridColumn:'1 / -1'}}>
               <button className="ghost" onClick={addLeg} disabled={!symbol}>Add leg</button>
             </div>
+          </div>
+          <div style={{marginTop:12}}>
+            <div className="muted" style={{marginBottom:6}}>Add perpetual</div>
+            <div className="grid" style={{gridTemplateColumns:'repeat(4, 1fr)', gap:8}}>
+              <label>
+                <div className="muted">Side</div>
+                <select value={perpSide} onChange={(e)=>setPerpSide(e.target.value as 'short'|'long')}>
+                  <option value="short">Short</option>
+                  <option value="long">Long</option>
+                </select>
+              </label>
+              <label>
+                <div className="muted">Qty</div>
+                <div style={{display:'flex', gap:6}}>
+                  <input
+                    type="number"
+                    min={perpMode === 'contracts' ? 0.0001 : 0.01}
+                    step={perpMode === 'contracts' ? 0.001 : 1}
+                    value={perpMode === 'contracts' ? perpQty : perpUsdTotal}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (perpMode === 'contracts') {
+                        setPerpQty(Number.isFinite(val) ? Math.abs(val) : 0);
+                      } else {
+                        setPerpUsdTotal(Number.isFinite(val) ? Math.abs(val) : 0);
+                      }
+                    }}
+                  />
+                  <select
+                    value={perpMode}
+                    onChange={(e) => {
+                      const next = e.target.value as 'contracts' | 'usd';
+                      if (next === perpMode) return;
+                      const mid = midPrice(tickers['ETHUSDT']);
+                      if (next === 'usd') {
+                        const qtyVal = Number(perpQty);
+                        if (Number.isFinite(qtyVal) && qtyVal > 0 && mid != null && mid > 0) {
+                          setPerpUsdTotal(Number((qtyVal * mid).toFixed(2)));
+                        }
+                      } else {
+                        const usdVal = Math.abs(Number(perpUsdTotal));
+                        if (Number.isFinite(usdVal) && usdVal > 0 && mid != null && mid > 0) {
+                          setPerpQty(Number((usdVal / mid).toFixed(4)));
+                        }
+                      }
+                      setPerpMode(next);
+                    }}
+                  >
+                    <option value="contracts">Contracts</option>
+                    <option value="usd">USD</option>
+                  </select>
+                </div>
+              </label>
+              <div style={{display:'flex', alignItems:'end'}}>
+                <button className="ghost" onClick={addPerpLeg} disabled={!canAddPerp}>
+                  Add Perp (ETHUSDT)
+                </button>
+              </div>
+            </div>
+            <div className="muted" style={{marginTop:4}}>USD amount converts to contracts using the current mid {midEth != null ? `$${midEth.toFixed(2)}` : '—'}; if pricing is unavailable, USD mode is temporarily disabled.</div>
           </div>
 
           <div style={{marginTop:12}}>
@@ -209,18 +320,19 @@ export function EditPositionModal({ id, onClose }: Props) {
                   </thead>
                   <tbody>
                     {draft.map((L, idx)=>{
+                      const isPerp = !String(L.leg.symbol).includes('-');
                       const t = tickers[L.leg.symbol] || {}; const m = midPrice(t);
                       return (
                         <tr key={idx} style={L.hidden ? { background: 'rgba(128,128,128,.12)' } : undefined}>
-                          <td>{L.leg.optionType}</td>
-                          <td>{new Date(L.leg.expiryMs).toISOString().slice(0,10)}</td>
-                          <td>{L.leg.strike}</td>
-                          <td>{L.side}</td>
+                          <td>{isPerp ? 'PERP' : L.leg.optionType}</td>
+                          <td>{isPerp ? '' : new Date(L.leg.expiryMs).toISOString().slice(0,10)}</td>
+                          <td>{isPerp ? '—' : L.leg.strike}</td>
+                          <td>{sideLabel(L.side)}</td>
                           <td>
                             <input style={{width:90}} type="number" min={0.1} step={0.1} value={L.qty} onChange={(e)=>setLegQty(idx, Number(e.target.value)||L.qty)} />
                           </td>
-                          <td>{L.entryPrice.toFixed(2)}</td>
-                          <td>{m!=null? m.toFixed(2): '—'}</td>
+                          <td>{Number.isFinite(L.entryPrice) ? L.entryPrice.toFixed(2) : '—'}</td>
+                          <td>{m!=null? `$${m.toFixed(2)}`: '—'}</td>
                           <td>
                             <button type="button" className="ghost" onClick={(e)=>{ e.stopPropagation(); toggleHide(idx); }} style={{marginRight:6, cursor:'pointer'}}>{L.hidden ? 'Unhide' : 'Hide'}</button>
                             <button type="button" className="ghost" onClick={(e)=>{ e.stopPropagation(); removeLeg(idx); }} style={{cursor:'pointer'}}>Remove</button>
