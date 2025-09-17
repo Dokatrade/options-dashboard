@@ -168,6 +168,90 @@ Single-page local web app to monitor and manage ETH options on Bybit. **Все �
 
 ---
 
+## IF Rule Builder Modal
+
+### Purpose & entry point
+- Allow users to attach alert/automation conditions to a position (row in Unified Positions table) without leaving the dashboard.
+- Launch via “IF” action button on a row; modal overlays viewport (fixed, centered, 860px width, 85% height cap).
+- All state lives locally; rules persist per position id in `localStorage['if-rules-v3']` (JSON map `{ [rowId]: IfRule }`).
+
+### Data structures (TypeScript)
+- `IfOperand`:
+  - `number`: `{ kind: 'number', value: number }`.
+  - `position`: `{ kind: 'position', metric: string }` — metrics enumerated in `posParams` (spot, netEntry, netMid, pnl, pnlPctMax, delta, vega, theta, dte).
+  - `leg`: `{ kind: 'leg', metric: string, legMode: 'current' | 'symbol', symbol?: string }` — metrics enumerated in `legParams` (spot, bid, ask, mid, entry, pnlLeg, ivPct, vega, delta, theta, oi, dSigma).
+- `IfSide`: `{ base: IfOperand, op?: { operator: '+' | '-' | '*' | '/', operand: IfOperand } }` (single arithmetic extension allowed).
+- `IfCond`: `{ left: IfSide, cmp: '>' | '<' | '=' | '>=' | '<=', right: IfSide }`.
+- `IfChain`: `{ scope: 'position' | 'leg', legSymbol?: string, conds: Array<{ conj?: 'AND' | 'OR', cond: IfCond }> }` — represents a block; leg blocks may target a specific leg symbol or “any leg”.
+- `IfRule`: `{ chains: Array<{ conj?: 'AND' | 'OR', chain: IfChain }> }` — top-level conjunctions combine blocks left-to-right.
+- `IfConditionTemplate`: `{ name: string, scope: 'position' | 'leg', cond: IfCond, legSymbol?: string | null }` stored in `localStorage['if-templates-v1']`.
+
+### Sanitisation & migration
+- `migrateRule(initial, legOptions)` converts legacy payloads into the current structure, guaranteeing at least one chain/condition.
+- `sanitizeOperand/Side/Cond/Chain` enforce:
+  - Numeric operands default to 0 when invalid.
+  - Unknown metrics revert to defaults (spot/mid).
+  - Leg operands outside a leg scope force `legMode: 'symbol'`.
+  - Leg symbols validated against `legOptions`; if missing, select first available; `null` preserved to mean “Any leg”.
+  - When arithmetic operator is `'/'`, the resulting side’s `unit` metadata is dropped (ratios have no `$`/`%`).
+- New chains created via `makeDefaultChain(scope)` spawn a single condition using scope-appropriate operands (`position spot` > `number 0` or `leg current mid` > `0`).
+
+### UI layout (top → bottom)
+1. **Header**: title `IF · {strategyName}`; right-aligned `Close` button.
+2. **Intro text**: guidance on building conditions.
+3. **Templates section**:
+   - Prefix label “Templates:”. Buttons labelled `⭐ {name}` apply stored conditions.
+   - Manage toggle reveals selection checkboxes + “Delete selected / Delete all”. Per-template “×” removes single entry after confirmation.
+   - Template callbacks (`onSaveTemplate`, `onDeleteTemplate`, `onDeleteTemplates`) bubble to `UnifiedPositionsTable` which mutates `if-templates-v1` and syncs state.
+4. **Condition overview**:
+   - Ordered list mirroring the actual rule (chains/conditions).
+   - Between entries, place uppercase conjunction label (`AND`/`OR`) when preceding clause joins via a connector.
+   - Each row contains:
+     - Ghost “×” button removing the referenced condition (delegates to `removeCondition(chainIdx, condIdx)`; deleting the last condition drops the chain).
+     - Caption `{Block label}:` where block label is “Position block”, “Leg block (SYMBOL)”, or “Leg block (any leg)”.
+     - Human-readable sentence built from highlighted operands (bold + light-brown `#b48b5a` for metric phrases). Division sides never display currency or percent units.
+     - Live indicator `→ value` where `value` = latest left-side evaluation `lhs` with merged units. Colour: green (`#2ecc71`) if condition satisfied, grey otherwise. When `evalCondDetails` is unavailable or `lhs` undefined, show em dash `—`.
+5. **Rule editor** (renders each chain):
+   - Chain header: optional conjunction dropdown (AND/OR) for chains beyond the first, “Block” label, scope selector (`Position`/`Legs`), optional leg symbol dropdown (`Any leg` + options), conditions count, “Remove block”.
+   - Conditions list: each entry is a dashed card containing optional conjunction selector, three columns (Left side / Comparator / Right side), a satisfaction dot ( green when `evalCondLive` true), “Save template” button (prompts for name, then clones sanitized cond) and “Remove”.
+   - `renderOperandEditor` per column supports type switcher, number input, metric dropdowns, and a secondary operand (with operator select + remove button). Leg operands inside leg scope can pick “This leg” (current leg) or a concrete symbol; outside, they always pick a symbol.
+   - “+ Add condition” button appends sanitized default cond with conjunction `AND`.
+6. **Footer controls**: “+ Leg block”, “+ Position block”, `Cancel`, `Save`.
+
+### Template flow
+- Save: prompts for template name → clones sanitized condition JSON → attaches scope + `legSymbol` (`undefined` omitted, `null` = any) → emits via `onSaveTemplate` → parent deduplicates by `(name, scope)` before persisting.
+- Apply: ensures a matching scope chain exists (creating default if not). For leg scope, resolved `legSymbol` priority: saved value → previously selected chain symbol → operand inference (`inferLegSymbolFromCond`). The merged chain is passed through `sanitizeChain` before state update.
+- Manage mode: Multi-selection uses `selectedTemplates` Set keyed as `${scope}:${name}`.
+
+### Evaluation + live data
+- Parent supplies two callbacks:
+  - `evalCondLive({ scope, legSymbol, cond })` → boolean; used for status dots and fallback satisfaction when detailed snapshot absent.
+  - `evalCondDetails({ scope, legSymbol, cond })` → `{ satisfied, lhs, rhs } | undefined`; used in overview arrow. For leg scope, function iterates matching legs; returns first satisfying snapshot or, if none satisfy, the last evaluated snapshot (so arrow still reflects actual value).
+- `UnifiedPositionsTable` computes these via helpers:
+  - Build `PositionEvalContext` (spot, leg cache, BS inputs) from current row.
+  - `evaluateCondSnapshot` calculates both sides with `evalSide` (supports numbers, position metrics, leg metrics, and arithmetic). Ratios treat divisor close to zero as undefined.
+  - For leg-scope snapshots, loop legs filtered by `legSymbol` (or all); compute metrics via `buildLegMetrics`; stop on first satisfied cond.
+- The modal reuses `evalCondLive` for the green status label next to the Save Template/Remove buttons.
+
+### Persistence & integration
+- Rules saved per row through `onSave` (modal re-sanitises before emit). Cancelling discards edits.
+- Templates persisted globally per user in localStorage `if-templates-v1` (array of `IfConditionTemplate`). Loader normalises legacy entries (missing `legSymbol` -> undefined; any string -> preserved; explicit null allowed).
+- When applying a template to a row missing that leg symbol, fallback selects first available symbol; if none, remains “Any leg”.
+- Condition overview uses `React.Fragment` to align arrow + text and shares the same removal handler as the cards to avoid divergence.
+
+### Accessibility & usability
+- All interactive elements are buttons/selects; ghost buttons rely on textual labels (“Close”, “Remove block”, etc.).
+- Keyboard: default browser focus order; removal buttons respond to Enter/Space.
+- Visual cues: live satisfaction dot and arrow change colour in real time; overview conjunction lines keep logical clarity; block counters show condition count.
+
+### Future extensions (out of scope now)
+- Background alerts (notifications) once condition satisfied.
+- Additional operands (e.g., custom expressions, portfolio metrics).
+- Multi-operand arithmetic (beyond single op) and parentheses.
+- Server sync of templates/rules.
+
+---
+
 ## Project proposals — 2025-09-15
 
 ### Сильные стороны

@@ -7,7 +7,7 @@ import type { Position, PositionLeg, SpreadPosition } from '../utils/types';
 import { downloadCSV, toCSV } from '../utils/csv';
 import { PositionView } from './PositionView';
 import { EditPositionModal } from './EditPositionModal';
-import { IfModal, IfRule } from './IfModal';
+import { IfModal, IfRule, IfCond, IfOperand, IfSide, IfComparator, IfChain, IfConditionTemplate, migrateRule } from './IfModal';
 
 type Row = {
   id: string;
@@ -81,8 +81,71 @@ export function UnifiedPositionsTable() {
   const [rPct, setRPct] = React.useState(0);
   const [ifRow, setIfRow] = React.useState<Row | null>(null);
   const [ifRules, setIfRules] = React.useState<Record<string, IfRule>>(() => {
-    try { const raw = localStorage.getItem('if-rules-v1'); return raw ? JSON.parse(raw) : {}; } catch { return {}; }
+    const load = (key: string): Record<string, IfRule> | undefined => {
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return undefined;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return undefined;
+        const entries = Object.entries(parsed as Record<string, unknown>).map(([id, rule]) => [id, migrateRule(rule)] as const);
+        return Object.fromEntries(entries);
+      } catch { return undefined; }
+    };
+    const latest = load('if-rules-v3');
+    if (latest) return latest;
+    const prev = load('if-rules-v2');
+    if (prev) {
+      try { localStorage.setItem('if-rules-v3', JSON.stringify(prev)); } catch {}
+      return prev;
+    }
+    const legacy = load('if-rules-v1');
+    if (legacy) {
+      try { localStorage.setItem('if-rules-v3', JSON.stringify(legacy)); } catch {}
+      return legacy;
+    }
+    return {};
   });
+  const [ifTemplates, setIfTemplates] = React.useState<IfConditionTemplate[]>(() => {
+    try {
+      const raw = localStorage.getItem('if-templates-v1');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      const list: IfConditionTemplate[] = [];
+      for (const item of parsed) {
+        const scope: 'position' | 'leg' = item?.scope === 'position' ? 'position' : 'leg';
+        if (!item?.cond) continue;
+        let legSymbol: string | null | undefined = undefined;
+        if (scope === 'leg') {
+          if (typeof item?.legSymbol === 'string') legSymbol = item.legSymbol;
+          else if (item?.legSymbol === null) legSymbol = null;
+        }
+        list.push({
+          name: String(item?.name ?? 'Шаблон'),
+          scope,
+          cond: item.cond as IfCond,
+          legSymbol,
+        });
+      }
+      return list;
+    } catch {
+      return [];
+    }
+  });
+
+  const handleSaveTemplate = React.useCallback((tpl: IfConditionTemplate) => {
+    setIfTemplates((prev) => {
+      const filtered = prev.filter((existing) => !(existing.name === tpl.name && existing.scope === tpl.scope));
+      return [...filtered, tpl];
+    });
+  }, []);
+  const handleDeleteTemplate = React.useCallback((tpl: IfConditionTemplate) => {
+    setIfTemplates((prev) => prev.filter((existing) => !(existing.name === tpl.name && existing.scope === tpl.scope)));
+  }, []);
+  const handleDeleteTemplates = React.useCallback((tpls: IfConditionTemplate[]) => {
+    if (!tpls.length) return;
+    setIfTemplates((prev) => prev.filter((existing) => !tpls.some((tpl) => tpl.name === existing.name && tpl.scope === existing.scope)));
+  }, []);
   // Real spot for IF-only calculations
   const [ifSpot, setIfSpot] = React.useState<number | undefined>();
 
@@ -167,8 +230,12 @@ export function UnifiedPositionsTable() {
 
   // Persist IF rules
   React.useEffect(() => {
-    try { localStorage.setItem('if-rules-v1', JSON.stringify(ifRules)); } catch {}
+    try { localStorage.setItem('if-rules-v3', JSON.stringify(ifRules)); } catch {}
   }, [ifRules]);
+
+  React.useEffect(() => {
+    try { localStorage.setItem('if-templates-v1', JSON.stringify(ifTemplates)); } catch {}
+  }, [ifTemplates]);
 
   // Helpers to compute per-leg metrics consistent with View
   const computeSpotForRow = (r: Row): number | undefined => {
@@ -277,148 +344,222 @@ export function UnifiedPositionsTable() {
     } catch { return undefined; }
   };
 
-  // Evaluate a single condition live for IF modal preview
-  const evalSingleCondLive = (r: Row, args: { scope: 'position'|'leg'; legSymbol?: string; cond: { param: string; cmp: any; value: number } }): boolean => {
-    const { scope, legSymbol, cond } = args;
-    if (scope === 'position') {
-      const c = calc(r);
-      const spot = computeSpotForRow(r);
-      const valOf = (p: string): number | undefined => {
-        switch (p) {
-          case 'spot': return spot;
-          case 'netEntry': return c.netEntry;
-          case 'netMid': return c.netMid;
-          case 'pnl': return c.pnl;
-          case 'pnlPctMax': {
-            const mp = maxProfitForRow(r, c);
-            if (!(mp != null && isFinite(mp) && mp > 0)) return undefined;
-            return (c.pnl / mp) * 100;
-          }
-          case 'delta': return c.greeks.delta;
-          case 'vega': return c.greeks.vega;
-          case 'theta': return c.greeks.theta;
-          case 'dte': return c.dte ?? undefined;
-          default: return undefined;
-        }
-      };
-      return evalCond(valOf(cond.param), cond.cmp, Number(cond.value));
-    } else {
-      const legs = r.legs.filter(L => !legSymbol || L.leg.symbol === legSymbol);
-      for (const L of legs) {
-        const t = tickers[L.leg.symbol] || {};
-        const { bid, ask } = bestBidAsk(t);
-        const mid = midPrice(t);
-        const ivp = ivPctForLeg(L, r);
-        const d = t?.delta != null ? (L.side === 'long' ? Number(t.delta) : -Number(t.delta)) : undefined;
-        const v = t?.vega != null ? (L.side === 'long' ? Number(t.vega) : -Number(t.vega)) : undefined;
-        const th = t?.theta != null ? (L.side === 'long' ? Number(t.theta) : -Number(t.theta)) : undefined;
-        const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
-        const ds = dSigmaForLeg(L, r);
-        const spot = computeSpotForRow(r);
-        const pnlLeg = (() => {
-          const entry = Number(L.entryPrice);
-          const m = mid;
-          const qty = Number(L.qty) || 1;
-          const sgn2 = L.side === 'short' ? 1 : -1;
-          return (isFinite(entry) && m != null && isFinite(m)) ? sgn2 * (entry - m) * qty : undefined;
-        })();
-        const valOf = (p: string): number | undefined => {
-          switch (p) {
-            case 'spot': return spot;
-            case 'bid': return bid; case 'ask': return ask; case 'mid': return mid; case 'entry': return Number(L.entryPrice);
-            case 'pnlLeg': return pnlLeg;
-            case 'ivPct': return ivp;
-            case 'vega': return v; case 'delta': return d; case 'theta': return th; case 'oi': return oi;
-            case 'dSigma': return ds;
-            default: return undefined;
-          }
-        };
-        if (evalCond(valOf(cond.param), cond.cmp, Number(cond.value))) return true;
+  type PositionEvalContext = {
+    row: Row;
+    calc: ReturnType<typeof calc>;
+    spot: number | undefined;
+    maxProfitCache?: number | null;
+    legCache: Map<string, LegMetrics>;
+  };
+
+  type LegMetrics = {
+    bid?: number;
+    ask?: number;
+    mid?: number;
+    entry?: number;
+    pnlLeg?: number;
+    ivPct?: number;
+    delta?: number;
+    vega?: number;
+    theta?: number;
+    oi?: number;
+    dSigma?: number;
+  };
+
+  const ensureMaxProfit = (ctx: PositionEvalContext): number | undefined => {
+    if (ctx.maxProfitCache === null) return undefined;
+    if (ctx.maxProfitCache != null) return ctx.maxProfitCache;
+    const mp = maxProfitForRow(ctx.row, ctx.calc);
+    if (!(mp != null && isFinite(mp))) {
+      ctx.maxProfitCache = null;
+      return undefined;
+    }
+    ctx.maxProfitCache = mp;
+    return mp;
+  };
+
+  const positionMetricValue = (param: string, ctx: PositionEvalContext): number | undefined => {
+    switch (param) {
+      case 'spot': return ctx.spot;
+      case 'netEntry': return ctx.calc.netEntry;
+      case 'netMid': return ctx.calc.netMid;
+      case 'pnl': return ctx.calc.pnl;
+      case 'pnlPctMax': {
+        const mp = ensureMaxProfit(ctx);
+        if (!(mp != null && isFinite(mp) && mp > 0)) return undefined;
+        return (ctx.calc.pnl / mp) * 100;
       }
-      return false;
+      case 'delta': return ctx.calc.greeks.delta;
+      case 'vega': return ctx.calc.greeks.vega;
+      case 'theta': return ctx.calc.greeks.theta;
+      case 'dte': return ctx.calc.dte ?? undefined;
+      default: return undefined;
     }
   };
 
-  const evalCond = (lhs: number | undefined, cmp: '>' | '<' | '=' | '>=' | '<=', rhs: number): boolean => {
+  const buildLegMetrics = (L: PositionLeg, r: Row): LegMetrics => {
+    const t = tickers[L.leg.symbol] || {};
+    const { bid, ask } = bestBidAsk(t);
+    const mid = midPrice(t);
+    const entryRaw = Number(L.entryPrice);
+    const entry = Number.isFinite(entryRaw) ? entryRaw : undefined;
+    const qty = Number(L.qty) || 1;
+    const sign = L.side === 'short' ? 1 : -1;
+    const pnlLeg = (entry != null && mid != null && isFinite(mid)) ? sign * (entry - mid) * qty : undefined;
+    const delta = t?.delta != null ? (L.side === 'long' ? Number(t.delta) : -Number(t.delta)) : undefined;
+    const vega = t?.vega != null ? (L.side === 'long' ? Number(t.vega) : -Number(t.vega)) : undefined;
+    const theta = t?.theta != null ? (L.side === 'long' ? Number(t.theta) : -Number(t.theta)) : undefined;
+    const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
+    const ivPct = ivPctForLeg(L, r);
+    const dSigma = dSigmaForLeg(L, r);
+    return { bid, ask, mid, entry, pnlLeg, delta, vega, theta, oi, ivPct, dSigma };
+  };
+
+  const metricsForSymbol = (ctx: PositionEvalContext, symbol?: string): LegMetrics | undefined => {
+    if (!symbol) return undefined;
+    if (ctx.legCache.has(symbol)) return ctx.legCache.get(symbol);
+    const leg = ctx.row.legs.find((L) => L.leg.symbol === symbol);
+    if (!leg) return undefined;
+    const metrics = buildLegMetrics(leg, ctx.row);
+    ctx.legCache.set(symbol, metrics);
+    return metrics;
+  };
+
+  const legMetricValue = (param: string, ctx: PositionEvalContext, leg?: LegMetrics): number | undefined => {
+    if (param === 'spot') return ctx.spot;
+    if (!leg) return undefined;
+    switch (param) {
+      case 'bid': return leg.bid;
+      case 'ask': return leg.ask;
+      case 'mid': return leg.mid;
+      case 'entry': return leg.entry;
+      case 'pnlLeg': return leg.pnlLeg;
+      case 'ivPct': return leg.ivPct;
+      case 'vega': return leg.vega;
+      case 'delta': return leg.delta;
+      case 'theta': return leg.theta;
+      case 'oi': return leg.oi;
+      case 'dSigma': return leg.dSigma;
+      default: return undefined;
+    }
+  };
+
+  const evalOperand = (operand: IfOperand, ctx: PositionEvalContext, legCtx?: { metrics?: LegMetrics; symbol?: string }): number | undefined => {
+    if (operand.kind === 'number') {
+      const v = Number(operand.value);
+      return Number.isFinite(v) ? v : undefined;
+    }
+    if (operand.kind === 'position') {
+      return positionMetricValue(operand.metric, ctx);
+    }
+    if (operand.kind === 'leg') {
+      if (operand.legMode === 'current') {
+        const metrics = legCtx?.metrics;
+        return legMetricValue(operand.metric, ctx, metrics);
+      }
+      const metrics = metricsForSymbol(ctx, operand.symbol);
+      return legMetricValue(operand.metric, ctx, metrics);
+    }
+    return undefined;
+  };
+
+  const evalSide = (side: IfSide, ctx: PositionEvalContext, legCtx?: { metrics?: LegMetrics; symbol?: string }): number | undefined => {
+    const base = evalOperand(side.base, ctx, legCtx);
+    if (!(base != null && isFinite(base))) return undefined;
+    if (!side.op) return base;
+    const rhs = evalOperand(side.op.operand, ctx, legCtx);
+    if (!(rhs != null && isFinite(rhs))) return undefined;
+    switch (side.op.operator) {
+      case '+': return base + rhs;
+      case '-': return base - rhs;
+      case '*': return base * rhs;
+      case '/': return Math.abs(rhs) < 1e-12 ? undefined : base / rhs;
+      default: return undefined;
+    }
+  };
+
+  const compareNumbers = (lhs: number | undefined, cmp: IfComparator, rhs: number | undefined): boolean => {
     if (!(lhs != null && isFinite(lhs))) return false;
+    if (!(rhs != null && isFinite(rhs))) return false;
     if (cmp === '>') return lhs > rhs;
     if (cmp === '<') return lhs < rhs;
     if (cmp === '>=') return lhs >= rhs;
     if (cmp === '<=') return lhs <= rhs;
     return Math.abs(lhs - rhs) < 1e-9;
   };
-  const evalChainLeg = (r: Row, c: any, chain: { legSymbol?: string; conds: Array<{ conj?: 'AND'|'OR'; cond: { param: string; cmp: any; value: number } }> }) => {
+
+  const evaluateCondSnapshot = (cond: IfCond, ctx: PositionEvalContext, legCtx?: { metrics?: LegMetrics; symbol?: string }): { satisfied: boolean; lhs?: number; rhs?: number } => {
+    const lhs = evalSide(cond.left, ctx, legCtx);
+    const rhs = evalSide(cond.right, ctx, legCtx);
+    return { satisfied: compareNumbers(lhs, cond.cmp, rhs), lhs, rhs };
+  };
+
+  const evaluateCond = (cond: IfCond, ctx: PositionEvalContext, legCtx?: { metrics?: LegMetrics; symbol?: string }): boolean => {
+    return evaluateCondSnapshot(cond, ctx, legCtx).satisfied;
+  };
+
+  // Evaluate a single condition live for IF modal preview
+  const evalSingleCondLive = (r: Row, args: { scope: 'position'|'leg'; legSymbol?: string; cond: IfCond }): boolean => {
+    const { scope, legSymbol, cond } = args;
+    const c = calc(r);
+    const ctx: PositionEvalContext = { row: r, calc: c, spot: computeSpotForRow(r), maxProfitCache: undefined, legCache: new Map() };
+    if (scope === 'position') {
+      return evaluateCond(cond, ctx);
+    }
+    const legs = r.legs.filter(L => !legSymbol || L.leg.symbol === legSymbol);
+    for (const L of legs) {
+      const metrics = buildLegMetrics(L, r);
+      if (evaluateCond(cond, ctx, { metrics, symbol: L.leg.symbol })) return true;
+    }
+    return false;
+  };
+
+  const evalCondDetails = (r: Row, args: { scope: 'position'|'leg'; legSymbol?: string; cond: IfCond }): { satisfied: boolean; lhs?: number; rhs?: number } | undefined => {
+    const { scope, legSymbol, cond } = args;
+    const c = calc(r);
+    const ctx: PositionEvalContext = { row: r, calc: c, spot: computeSpotForRow(r), maxProfitCache: undefined, legCache: new Map() };
+    if (scope === 'position') {
+      return evaluateCondSnapshot(cond, ctx);
+    }
+    const legs = r.legs.filter(L => !legSymbol || L.leg.symbol === legSymbol);
+    let fallback: { satisfied: boolean; lhs?: number; rhs?: number } | undefined;
+    for (const L of legs) {
+      const metrics = buildLegMetrics(L, r);
+      const snap = evaluateCondSnapshot(cond, ctx, { metrics, symbol: L.leg.symbol });
+      if (!fallback) fallback = snap;
+      if (snap.satisfied) return snap;
+    }
+    return fallback;
+  };
+
+  const evalChainLeg = (r: Row, c: ReturnType<typeof calc>, chain: IfChain): Set<string> => {
     const matchedSyms = new Set<string>();
-    // Evaluate against target legs (all or specific);
+    const ctx: PositionEvalContext = { row: r, calc: c, spot: computeSpotForRow(r), maxProfitCache: undefined, legCache: new Map() };
     const iterLegs = r.legs.filter(L => !chain.legSymbol || L.leg.symbol === chain.legSymbol);
     for (const L of iterLegs) {
-      const t = tickers[L.leg.symbol] || {};
-      const { bid, ask } = bestBidAsk(t);
-      const mid = midPrice(t);
-      const ivp = ivPctForLeg(L, r);
-      const d = t?.delta != null ? (L.side === 'long' ? Number(t.delta) : -Number(t.delta)) : undefined;
-      const v = t?.vega != null ? (L.side === 'long' ? Number(t.vega) : -Number(t.vega)) : undefined;
-      const th = t?.theta != null ? (L.side === 'long' ? Number(t.theta) : -Number(t.theta)) : undefined;
-      const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
-      const ds = dSigmaForLeg(L, r);
-      const spot = computeSpotForRow(r);
-      const pnlLeg = (() => {
-        const entry = Number(L.entryPrice);
-        const m = mid;
-        const qty = Number(L.qty) || 1;
-        const sgn2 = L.side === 'short' ? 1 : -1;
-        return (isFinite(entry) && m != null && isFinite(m)) ? sgn2 * (entry - m) * qty : undefined;
-      })();
-      const valOf = (p: string): number | undefined => {
-        switch (p) {
-          case 'spot': return spot;
-          case 'bid': return bid; case 'ask': return ask; case 'mid': return mid; case 'entry': return Number(L.entryPrice);
-          case 'pnlLeg': return pnlLeg;
-          case 'ivPct': return ivp;
-          case 'vega': return v; case 'delta': return d; case 'theta': return th; case 'oi': return oi;
-          case 'dSigma': return ds;
-          default: return undefined;
-        }
-      };
+      const metrics = buildLegMetrics(L, r);
+      const legCtx = { metrics, symbol: L.leg.symbol };
       let ok: boolean | undefined = undefined;
       for (let i = 0; i < chain.conds.length; i++) {
         const it = chain.conds[i];
-        const cur = evalCond(valOf(it.cond.param), it.cond.cmp, Number(it.cond.value));
+        const cur = evaluateCond(it.cond, ctx, legCtx);
         if (i === 0) ok = cur; else ok = (it.conj === 'OR') ? ((ok as boolean) || cur) : ((ok as boolean) && cur);
       }
       if (ok) matchedSyms.add(L.leg.symbol);
     }
     return matchedSyms;
   };
-  const evalChainPos = (r: Row, c: any, chain: { conds: Array<{ conj?: 'AND'|'OR'; cond: { param: string; cmp: any; value: number } }> }) => {
-    const spot = computeSpotForRow(r);
-      const valOf = (p: string): number | undefined => {
-        switch (p) {
-          case 'spot': return spot;
-          case 'netEntry': return c.netEntry;
-          case 'netMid': return c.netMid;
-          case 'pnl': return c.pnl;
-          case 'pnlPctMax': {
-            const mp = maxProfitForRow(r, c);
-            if (!(mp != null && isFinite(mp) && mp > 0)) return undefined;
-            return (c.pnl / mp) * 100;
-          }
-          case 'delta': return c.greeks.delta;
-          case 'vega': return c.greeks.vega;
-          case 'theta': return c.greeks.theta;
-          case 'dte': return c.dte ?? undefined;
-          default: return undefined;
-        }
-      };
+  const evalChainPos = (r: Row, c: ReturnType<typeof calc>, chain: IfChain) => {
+    const ctx: PositionEvalContext = { row: r, calc: c, spot: computeSpotForRow(r), maxProfitCache: undefined, legCache: new Map() };
     let ok: boolean | undefined = undefined;
     for (let i = 0; i < chain.conds.length; i++) {
       const it = chain.conds[i];
-      const cur = evalCond(valOf(it.cond.param), it.cond.cmp, Number(it.cond.value));
+      const cur = evaluateCond(it.cond, ctx);
       if (i === 0) ok = cur; else ok = (it.conj === 'OR') ? ((ok as boolean) || cur) : ((ok as boolean) && cur);
     }
     return !!ok;
   };
-  const evalRule = (r: Row, c: any, rule?: IfRule): { matched: boolean; matchedLegs?: Set<string> } => {
+  const evalRule = (r: Row, c: ReturnType<typeof calc>, rule?: IfRule): { matched: boolean; matchedLegs?: Set<string> } => {
     if (!rule || !rule.chains.length) return { matched: false };
     let agg: boolean | undefined = undefined;
     let matchedLegs = new Set<string>();
@@ -438,52 +579,26 @@ export function UnifiedPositionsTable() {
   };
 
   // Per-leg highlight: a leg is highlighted if it satisfies the combined result of ONLY leg-scope chains
-  const matchedLegsOnly = (r: Row, c: any, rule?: IfRule): Set<string> => {
+  const matchedLegsOnly = (r: Row, c: ReturnType<typeof calc>, rule?: IfRule): Set<string> => {
     const out = new Set<string>();
     if (!rule || !rule.chains.length) return out;
     const legChains = rule.chains.filter(w => w.chain.scope === 'leg');
     if (!legChains.length) return out;
+    const ctx: PositionEvalContext = { row: r, calc: c, spot: computeSpotForRow(r), maxProfitCache: undefined, legCache: new Map() };
     for (const L of r.legs) {
       // Only consider chains that target this symbol or any
       const relevant = legChains.filter(w => !w.chain.legSymbol || w.chain.legSymbol === L.leg.symbol);
       if (!relevant.length) continue;
+      const metrics = buildLegMetrics(L, r);
+      const legCtx = { metrics, symbol: L.leg.symbol };
       let agg: boolean | undefined = undefined;
       for (let i = 0; i < relevant.length; i++) {
         const wrap = relevant[i];
         const ch = wrap.chain;
-        // evaluate this leg against chain conds
-        const t = tickers[L.leg.symbol] || {};
-        const { bid, ask } = bestBidAsk(t);
-        const mid = midPrice(t);
-        const ivp = ivPctForLeg(L, r);
-        const d = t?.delta != null ? (L.side === 'long' ? Number(t.delta) : -Number(t.delta)) : undefined;
-        const v = t?.vega != null ? (L.side === 'long' ? Number(t.vega) : -Number(t.vega)) : undefined;
-        const th = t?.theta != null ? (L.side === 'long' ? Number(t.theta) : -Number(t.theta)) : undefined;
-        const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
-        const ds = dSigmaForLeg(L, r);
-        const spot = computeSpotForRow(r);
-        const pnlLeg = (() => {
-          const entry = Number(L.entryPrice);
-          const m = mid;
-          const qty = Number(L.qty) || 1;
-          const sgn2 = L.side === 'short' ? 1 : -1;
-          return (isFinite(entry) && m != null && isFinite(m)) ? sgn2 * (entry - m) * qty : undefined;
-        })();
-        const valOf = (p: string): number | undefined => {
-          switch (p) {
-            case 'spot': return spot;
-            case 'bid': return bid; case 'ask': return ask; case 'mid': return mid; case 'entry': return Number(L.entryPrice);
-            case 'pnlLeg': return pnlLeg;
-            case 'ivPct': return ivp;
-            case 'vega': return v; case 'delta': return d; case 'theta': return th; case 'oi': return oi;
-            case 'dSigma': return ds;
-            default: return undefined;
-          }
-        };
         let cur: boolean | undefined = undefined;
         for (let j = 0; j < ch.conds.length; j++) {
           const it = ch.conds[j];
-          const here = evalCond(valOf(it.cond.param), it.cond.cmp, Number(it.cond.value));
+          const here = evaluateCond(it.cond, ctx, legCtx);
           if (j === 0) cur = here; else cur = (it.conj === 'OR') ? ((cur as boolean) || here) : ((cur as boolean) && here);
         }
         if (i === 0) agg = !!cur; else agg = (wrap.conj === 'OR') ? ((agg as boolean) || !!cur) : ((agg as boolean) && !!cur);
@@ -1028,12 +1143,28 @@ export function UnifiedPositionsTable() {
       )}
       {ifRow && (
         <IfModal
+          key={ifRow.id}
           title={strategyName(ifRow.legs)}
           legOptions={ifRow.legs.map(L=>({ symbol: L.leg.symbol, label: `${L.side === 'short' ? 'Short' : 'Long'} · ${L.leg.optionType}${L.leg.strike} × ${L.qty} · ${L.leg.symbol}` }))}
           initial={ifRules[ifRow.id]}
+          ruleKey={ifRow.id}
           onClose={() => setIfRow(null)}
-          onSave={(rule) => { setIfRules(prev => ({ ...prev, [ifRow.id]: rule })); setIfRow(null); }}
+          onSave={(rule) => {
+            const targetId = ifRow.id;
+            setIfRules((prev) => {
+              const next = { ...prev };
+              if (!rule.chains.length) delete next[targetId];
+              else next[targetId] = rule;
+              return next;
+            });
+            setIfRow(null);
+          }}
           evalCondLive={({ scope, legSymbol, cond }) => evalSingleCondLive(ifRow, { scope, legSymbol, cond })}
+          evalCondDetails={({ scope, legSymbol, cond }) => evalCondDetails(ifRow, { scope, legSymbol, cond })}
+          templates={ifTemplates}
+          onSaveTemplate={handleSaveTemplate}
+          onDeleteTemplate={handleDeleteTemplate}
+          onDeleteTemplates={handleDeleteTemplates}
         />
       )}
       {editId && <EditPositionModal id={editId} onClose={() => setEditId(null)} />}

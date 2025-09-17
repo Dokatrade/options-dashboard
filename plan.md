@@ -83,8 +83,83 @@ Deep overhaul of PositionView (unified chart) and related UX. The following brin
 Implications
 - Users can analyze any construction with legs expiring on different dates; the T+0 curve behaves realistically across the whole life of the longest leg.
 - Breakeven visualization now answers the “today vs expiry” question directly and cleanly.
-- Per‑position persistence makes “come back later” workflows seamless.
+- Per-position persistence makes “come back later” workflows seamless.
 - The chart and UI states are sufficiently standardized to be rebuilt from this plan and the PRD.
+
+---
+
+## IF Rule Builder Modal — Implementation Guide
+
+The IF modal is a reusable rule builder that attaches conditional logic to a position row. Recreate it by following the data model, sanitisation pipeline, UI composition, persistence, and evaluation hooks below.
+
+### Data model and helpers
+- Core types (defined in `IfModal.tsx`)
+  - `IfOperand`: discriminated union of `number`, `position`, and `leg` operands. Leg operands carry `metric`, `legMode` (`current` within a leg block, `symbol` elsewhere), and optional `symbol`.
+  - `IfSide`: arithmetic expression with mandatory `base: IfOperand` and optional `op` containing `{ operator: '+' | '-' | '*' | '/', operand: IfOperand }`.
+  - `IfCond`: `{ left: IfSide, cmp: '>' | '<' | '=' | '>=' | '<=', right: IfSide }`.
+  - `IfChain`: block-scoped set of conditions `{ scope: 'position' | 'leg', legSymbol?: string, conds: Array<{ conj?: 'AND' | 'OR', cond: IfCond }> }`.
+  - `IfRule`: list of chains with optional top-level conjunctions.
+  - `IfConditionTemplate`: persisted templates `{ name, scope, cond, legSymbol?: string|null }` (null = explicit “Any leg”).
+- Utility tables describe available metrics (`posParams`, `legParams`) and unit metadata. Helpers include `createOperand`, `sanitizeOperand`, `sanitizeSide`, `sanitizeCond`, `sanitizeChain`, and `migrateRule`. Sanitizers enforce valid metrics, numeric fallbacks, and ensure leg symbol alignment with the supplied dropdown options.
+- Arithmetic unit handling: when a side uses `operator: '/'`, resulting descriptors drop currency/percent units so rendered ratios omit `$`/`%` prefixes.
+
+### Modal lifecycle and state
+- Props accepted by `<IfModal />`:
+  - `initial` rule, `legOptions` list, and optional `ruleKey` for resetting when switching rows.
+  - `onSave`, `onClose` callbacks.
+  - `evalCondLive` (boolean preview) and `evalCondDetails` (returns `{ satisfied, lhs, rhs }`) used for indicators and live values.
+  - Template hooks `templates`, `onSaveTemplate`, `onDeleteTemplate`, `onDeleteTemplates`.
+- Internal state: `rule` (sanitised `IfRule`), template management booleans/sets, plus memoised helpers for per-chain contexts.
+- Rule initialisation: `React.useEffect` remigrates when `initial`, `legOptions`, or `ruleKey` change. Chains default to a single condition with scope-appropriate operands (position spot or leg current metric).
+
+### UI structure
+1. **Header**: title “IF · {position name}” with Close button.
+2. **Intro**: text describing how to build conditions.
+3. **Templates toolbar**:
+   - Renders passed templates as `⭐ Template` buttons. Clicking applies the saved condition, auto-creating a chain if absent. Leg templates optionally carry a saved `legSymbol`; otherwise the system infers one from the operands or keeps “Any leg”.
+   - Manage mode toggles checkboxes and bulk delete buttons.
+   - Each template button includes an inline delete (“×”) where allowed.
+4. **Condition overview** (directly beneath templates): generated from current rule state.
+   - Entries keep logical order. Any leading conjunction (AND/OR) is displayed in a muted line between sentences.
+   - Each row contains: ghost “×” button (calls `removeCondition` for the referenced chain/condition), bold chain label (“Position block”, “Leg block (symbol)” or “Leg block (any leg)”), the human-readable sentence (left/right operands with bold light-brown metrics), and a live value indicator `→ currentValue`. Value takes the latest left-hand evaluation (`lhs`) formatted with merged units; arrow text colours green (`#2ecc71`) when satisfied, grey otherwise.
+
+5. **Rule editor** (list of blocks): for every chain
+   - Conjunction dropdown shown for chains beyond the first.
+   - Block scope selector (“Position” vs “Legs”). For leg blocks the next dropdown chooses “Any leg” or a concrete symbol. Changing scope triggers resanitisation.
+   - Stats chip “conditions: N” and “Remove block” button. Removing a final condition deletes the chain entirely.
+   - Each condition card includes:
+     - Optional conjunction selector.
+     - Three columns (“Left side”, “Comparator”, “Right side”) each containing editors produced by `renderSideEditor`/`renderOperandEditor`.
+     - Live status dot (green when `evalCondLive` returns true).
+     - “Save template” (if handler provided) and “Remove” buttons.
+   - “+ Add condition” button appends a sanitized default condition joined with AND.
+6. **Footer**: “+ Leg block”, “+ Position block”, Cancel, Save.
+
+### Operand editor behaviour
+- Source selector toggles between Position/Leg/Number. Switching sanitises into the relevant operand type.
+- Number editor: `<input type="number" step="any">`.
+- Position metrics: `<select>` from `posParams`.
+- Leg metrics: two stacked selects when editing inside a leg scope (leg mode current vs symbol) or single select in position scope that always specifies a leg symbol.
+- Arithmetic operand: `+ Operand` button attaches `{ operator: '+', operand: defaultNumber }`. Operator dropdown offers `+ - × ÷`; remove button collapses back to bare base operand.
+
+### Templates and persistence
+- Saving a template clones the condition JSON, packages it with scope and current leg block selection (`legSymbol` or null), and delegates to `onSaveTemplate`. Unified table stores templates under `localStorage['if-templates-v1']`.
+- Loading via `applyTemplate` ensures the target chain exists (creates default if necessary), injects the sanitised condition, resolves leg symbol (saved → use, otherwise infer from operands), then re-sanitises the whole chain to enforce metric bounds.
+- Template manage mode offers per-item delete (`handleDeleteTemplate` with confirmation), multi-select delete, and “Delete all”.
+
+### Condition overview rendering
+- Human-readable sentences combine `describeSideText` + `comparatorText`. Highlighted operands (`position spot price`, `selected leg delta`, etc.) are bold and coloured `#b48b5a`. Division expressions never reapply currency/percent units.
+- Each overview row binds `removeCondition(chainIdx, condIdx)` to the ghost cross so that removing from the summary mutates the underlying rule.
+
+### Save/Cancel workflow
+- `handleSave` re-sanitises every chain before emitting `onSave` with a fresh `IfRule`. Cancel calls `onClose` without mutation.
+- Parent (`UnifiedPositionsTable`) stores saved rules in localStorage `if-rules-v3` keyed by row id. It also wires `evalCondLive` and `evalCondDetails` (see PRD for algorithms) so the modal stays in sync with live data.
+
+### Evaluation hooks (for live indicators)
+- `evalCondLive(args)` → boolean for the green dot and fallback satisfaction state.
+- `evalCondDetails(args)` → `{ satisfied, lhs, rhs }` used by the overview arrow. Leg-scope requests evaluate each matching leg sequentially and return the first satisfying snapshot; if none satisfy, it returns the last computed snapshot for transparency.
+
+Rebuilding the IF modal from scratch using this plan should produce identical user-visible behaviour, template persistence, and live evaluation semantics.
 
 ---
 
