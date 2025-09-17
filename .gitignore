@@ -16,3 +16,7 @@ coverage/
 # Env
 .env
 .env.*
+
+# Build caches
+.vite/
+*.tsbuildinfo
