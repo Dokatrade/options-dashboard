@@ -1,6 +1,7 @@
 import React from 'react';
 import { useStore } from '../store/store';
 import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk } from '../services/bybit';
+import { ensureUsdtSymbol } from '../utils/symbols';
 import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
 import type { Position, InstrumentInfo, Leg, OptionType } from '../utils/types';
 
@@ -36,13 +37,43 @@ export function EditPositionModal({ id, onClose }: Props) {
     return () => { m = false; };
   }, []);
 
-  React.useEffect(() => {
-    const mk = (exp: number | '', type: OptionType) => {
-      if (!exp) return [] as InstrumentInfo[];
-      return instruments.filter(i => i.deliveryTime === exp && i.optionType === type).sort((a,b)=>a.strike-b.strike);
+  const buildChain = React.useCallback((exp: number | '', type: OptionType | null) => {
+    if (!exp || !type) return [] as InstrumentInfo[];
+    const base = instruments
+      .filter((i) => i.deliveryTime === exp && i.optionType === type)
+      .sort((a, b) => a.strike - b.strike);
+    const monthCodes = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+    const expiryCode = (ms: number): string => {
+      const d = new Date(ms);
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      const m = monthCodes[d.getUTCMonth()];
+      const yy = String(d.getUTCFullYear() % 100).padStart(2, '0');
+      return `${dd}${m}${yy}`;
     };
-    setChain(mk(expiry, optType));
-  }, [instruments, expiry, optType]);
+    try {
+      const code = expiryCode(exp as number);
+      const seen = new Set(base.map((i) => i.symbol));
+      const extras: InstrumentInfo[] = [];
+      Object.keys(tickers || {}).forEach((sym) => {
+        if (!sym.includes(`-${code}-`)) return;
+        const parts = sym.split('-');
+        const optPart = (parts?.[3] || '').toUpperCase();
+        if (!optPart.startsWith(type)) return;
+        const normalized = ensureUsdtSymbol(sym);
+        if (seen.has(normalized) || seen.has(sym)) return;
+        const strike = Number(parts?.[2]);
+        if (!Number.isFinite(strike)) return;
+        const settleCoin = parts?.[4] ? parts[4].toUpperCase() : 'USDT';
+        extras.push({ symbol: normalized, strike, optionType: type, deliveryTime: exp as number, settleCoin });
+      });
+      if (extras.length) return [...base, ...extras].sort((a, b) => a.strike - b.strike);
+    } catch {}
+    return base;
+  }, [instruments, tickers]);
+
+  React.useEffect(() => {
+    setChain(buildChain(expiry, optType));
+  }, [buildChain, expiry, optType]);
 
   React.useEffect(() => {
     const symbols = new Set<string>();
@@ -118,8 +149,8 @@ export function EditPositionModal({ id, onClose }: Props) {
   }, [rollIdx, draft]);
   const rollChain = React.useMemo(() => {
     if (rollIdx === '' || !rollType || !rollExpiry) return [] as InstrumentInfo[];
-    return instruments.filter(i => i.optionType === rollType && i.deliveryTime === rollExpiry).sort((a,b)=>a.strike-b.strike);
-  }, [rollIdx, rollType, rollExpiry, instruments]);
+    return buildChain(rollExpiry, rollType);
+  }, [buildChain, rollIdx, rollType, rollExpiry]);
 
   const midEth = midPrice(tickers['ETHUSDT']);
   const sanitizedPerpQty = (() => {
@@ -177,8 +208,24 @@ export function EditPositionModal({ id, onClose }: Props) {
                 <select value={rollSymbol} onChange={(e)=>setRollSymbol(e.target.value)} disabled={rollIdx==='' || !rollExpiry}>
                   <option value="">Select strike</option>
                   {rollChain.map(i=> {
-                    const t = tickers[i.symbol]||{}; const m = midPrice(t); const b=t?.bid1Price, a=t?.ask1Price;
-                    const label = `${i.strike} — ${m!=null? '$'+m.toFixed(2): (b!=null&&a!=null? `$${Number(b).toFixed(2)}/${Number(a).toFixed(2)}`:'—')}`;
+                    const t = tickers[i.symbol] || {};
+                    const { bid: bRaw, ask: aRaw } = bestBidAsk(t);
+                    const bid = bRaw != null && Number.isFinite(Number(bRaw)) ? Number(bRaw) : undefined;
+                    const ask = aRaw != null && Number.isFinite(Number(aRaw)) ? Number(aRaw) : undefined;
+                    const mid = (() => {
+                      const m = midPrice(t);
+                      return m != null && Number.isFinite(m) ? m : undefined;
+                    })();
+                    const srcSide = rollIdx !== '' && draft[Number(rollIdx)] ? draft[Number(rollIdx)].side : 'short';
+                    const preferred = srcSide === 'short'
+                      ? (bid ?? ask ?? mid)
+                      : (ask ?? bid ?? mid);
+                    const priceLabel = preferred != null ? `$${preferred.toFixed(2)}` : '—';
+                    const deltaVal = t?.delta != null && Number.isFinite(Number(t.delta)) ? Number(t.delta) : undefined;
+                    const deltaLabel = deltaVal != null ? deltaVal.toFixed(3) : '—';
+                    const oiVal = t?.openInterest != null && Number.isFinite(Number(t.openInterest)) ? Number(t.openInterest) : undefined;
+                    const oiLabel = oiVal != null ? oiVal : '—';
+                    const label = `${i.strike} — ${priceLabel} · Δ ${deltaLabel} · OI ${oiLabel}`;
                     return <option key={i.symbol} value={i.symbol}>{label}</option>;
                   })}
                 </select>
@@ -219,8 +266,23 @@ export function EditPositionModal({ id, onClose }: Props) {
               <select value={symbol} onChange={(e)=>setSymbol(e.target.value)} disabled={!expiry}>
                 <option value="">Select strike</option>
                 {chain.map(i=>{
-                  const t = tickers[i.symbol]||{}; const m = midPrice(t); const { bid: b, ask: a } = bestBidAsk(t);
-                  const label = `${i.strike} — ${m!=null? '$'+m.toFixed(2): (b!=null&&a!=null? `$${Number(b).toFixed(2)}/${Number(a).toFixed(2)}`:'—')}`;
+                  const t = tickers[i.symbol] || {};
+                  const { bid: bRaw, ask: aRaw } = bestBidAsk(t);
+                  const bid = bRaw != null && Number.isFinite(Number(bRaw)) ? Number(bRaw) : undefined;
+                  const ask = aRaw != null && Number.isFinite(Number(aRaw)) ? Number(aRaw) : undefined;
+                  const mid = (() => {
+                    const m = midPrice(t);
+                    return m != null && Number.isFinite(m) ? m : undefined;
+                  })();
+                  const preferred = side === 'short'
+                    ? (bid ?? ask ?? mid)
+                    : (ask ?? bid ?? mid);
+                  const priceLabel = preferred != null ? `$${preferred.toFixed(2)}` : '—';
+                  const deltaVal = t?.delta != null && Number.isFinite(Number(t.delta)) ? Number(t.delta) : undefined;
+                  const deltaLabel = deltaVal != null ? deltaVal.toFixed(3) : '—';
+                  const oiVal = t?.openInterest != null && Number.isFinite(Number(t.openInterest)) ? Number(t.openInterest) : undefined;
+                  const oiLabel = oiVal != null ? oiVal : '—';
+                  const label = `${i.strike} — ${priceLabel} · Δ ${deltaLabel} · OI ${oiLabel}`;
                   return <option key={i.symbol} value={i.symbol}>{label}</option>;
                 })}
               </select>
