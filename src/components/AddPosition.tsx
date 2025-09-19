@@ -38,6 +38,39 @@ export function AddPosition() {
   const chainRef = React.useRef<InstrumentInfo[]>([]);
   const draftRef = React.useRef<DraftLeg[]>([]);
 
+  const mergeTickerUpdate = React.useCallback((sym: string, payload: Record<string, any>) => {
+    setTickers(prev => {
+      const cur = prev[sym] || {};
+      const merged: any = { ...cur };
+      for (const [key, value] of Object.entries(payload)) {
+        if (value == null) continue;
+        if (typeof value === 'number' && Number.isNaN(value)) continue;
+        merged[key] = value;
+      }
+      return { ...prev, [sym]: merged };
+    });
+  }, []);
+
+  const captureRealtimeSnapshot = React.useCallback(async (symbols: string[]) => {
+    const limited = symbols.slice(0, 180);
+    await Promise.all(limited.map((sym) => new Promise<void>((resolve) => {
+      let resolved = false;
+      const stop = (sym.includes('-') ? subscribeOptionTicker : subscribeSpotTicker)(sym, (t) => {
+        if (resolved) return;
+        resolved = true;
+        mergeTickerUpdate(sym, t as Record<string, any>);
+        stop();
+        resolve();
+      });
+      setTimeout(() => {
+        if (resolved) return;
+        resolved = true;
+        try { stop(); } catch {}
+        resolve();
+      }, 500);
+    })));
+  }, [mergeTickerUpdate]);
+
   React.useEffect(() => () => { mountedRef.current = false; }, []);
 
   React.useEffect(() => {
@@ -162,11 +195,19 @@ export function AddPosition() {
           return next;
         });
       }
-      if (i + chunkSize < syms.length) {
-        await new Promise(resolve => setTimeout(resolve, 0));
-      }
+    if (i + chunkSize < syms.length) {
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
-  }, []);
+  }
+
+    await captureRealtimeSnapshot(
+      Array.from(new Set([
+        ...chainRef.current.map((i) => i.symbol),
+        ...draftRef.current.map((d) => d.leg.symbol),
+        'ETHUSDT',
+      ]))
+    );
+  }, [captureRealtimeSnapshot]);
 
   React.useEffect(() => {
     (async () => {

@@ -212,6 +212,39 @@ export function UnifiedPositionsTable() {
     rowsRef.current = rows;
   }, [rows]);
 
+  const mergeTickerUpdate = React.useCallback((sym: string, payload: Record<string, any>) => {
+    setTickers(prev => {
+      const cur = prev[sym] || {};
+      const merged: any = { ...cur };
+      for (const [key, value] of Object.entries(payload)) {
+        if (value == null) continue;
+        if (typeof value === 'number' && Number.isNaN(value)) continue;
+        merged[key] = value;
+      }
+      return { ...prev, [sym]: merged };
+    });
+  }, []);
+
+  const captureRealtimeSnapshot = React.useCallback(async (symbols: string[]) => {
+    const limited = symbols.slice(0, 180);
+    await Promise.all(limited.map((sym) => new Promise<void>((resolve) => {
+      let resolved = false;
+      const stop = (sym.includes('-') ? subscribeOptionTicker : subscribeSpotTicker)(sym, (t) => {
+        if (resolved) return;
+        resolved = true;
+        mergeTickerUpdate(sym, t as Record<string, any>);
+        stop();
+        resolve();
+      });
+      setTimeout(() => {
+        if (resolved) return;
+        resolved = true;
+        try { stop(); } catch {}
+        resolve();
+      }, 500);
+    })));
+  }, [mergeTickerUpdate]);
+
   const performSlowRefresh = React.useCallback(async () => {
     const rowsSnapshot = rowsRef.current;
     if (!rowsSnapshot.length) return;
@@ -265,20 +298,25 @@ export function UnifiedPositionsTable() {
           if (bid != null || ask != null) updates[sym] = { bid, ask };
         }
       }
-      if (Object.keys(updates).length) {
-        setTickers(prev => {
-          const next = { ...prev } as Record<string, any>;
-          for (const [sym, { bid, ask }] of Object.entries(updates)) {
-            next[sym] = { ...(next[sym] || {}), obBid: bid, obAsk: ask };
-          }
-          return next;
-        });
-      }
-      if (i + chunkSize < syms.length) {
-        await new Promise(resolve => setTimeout(resolve, 0));
-      }
+    if (Object.keys(updates).length) {
+      setTickers(prev => {
+        const next = { ...prev } as Record<string, any>;
+        for (const [sym, { bid, ask }] of Object.entries(updates)) {
+          next[sym] = { ...(next[sym] || {}), obBid: bid, obAsk: ask };
+        }
+        return next;
+      });
     }
-  }, [setTickers]);
+    if (i + chunkSize < syms.length) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+
+    await captureRealtimeSnapshot([
+      ...Array.from(new Set(rowsSnapshot.flatMap(r => r.legs.map(L => L.leg.symbol)))),
+      'ETHUSDT',
+    ]);
+  }, [captureRealtimeSnapshot, setTickers]);
 
   React.useEffect(() => {
     return register(() => performSlowRefresh());
@@ -921,11 +959,11 @@ export function UnifiedPositionsTable() {
     <div>
       <h3>My Positions</h3>
       <div style={{display:'flex', gap: 12, alignItems:'center', marginBottom: 6}}>
+        <button className="ghost" onClick={exportCSV}>Export CSV</button>
         <label style={{display:'flex', gap:6, alignItems:'center'}}>
           <input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />
           <span className="muted">Show closed</span>
         </label>
-        <button className="ghost" onClick={exportCSV}>Export CSV</button>
         <label style={{display:'flex', gap:6, alignItems:'center'}}>
           <input type="checkbox" checked={useExecPnl} onChange={(e) => setUseExecPnl(e.target.checked)} />
           <span className="muted">PNL($) exec</span>
