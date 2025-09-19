@@ -181,8 +181,8 @@ export function EditPositionModal({ id, onClose }: Props) {
           {/* Roll helper */}
           <div style={{marginBottom: 12}}>
             <div className="muted" style={{marginBottom:6}}>Roll helper</div>
-            <div className="grid" style={{gridTemplateColumns:'repeat(4, 1fr)', gap:8}}>
-              <label>
+            <div style={{display:'flex', flexWrap:'nowrap', alignItems:'flex-end', gap:8}}>
+              <label style={{display:'flex', flexDirection:'column', minWidth:170}}>
                 <div className="muted">Leg to roll</div>
                 <select value={rollIdx} onChange={(e)=>{ const v = e.target.value; setRollIdx(v===''? '': Number(v)); setRollExpiry(''); setRollSymbol(''); }}>
                   <option value="">Select leg</option>
@@ -194,7 +194,7 @@ export function EditPositionModal({ id, onClose }: Props) {
                   })}
                 </select>
               </label>
-              <label>
+              <label style={{display:'flex', flexDirection:'column', minWidth:150}}>
                 <div className="muted">Target expiry</div>
                 <select value={rollExpiry} onChange={(e)=>{ const v=e.target.value; setRollExpiry(v===''?'':Number(v)); setRollSymbol(''); }} disabled={rollIdx===''}>
                   <option value="">Select expiry</option>
@@ -203,7 +203,7 @@ export function EditPositionModal({ id, onClose }: Props) {
                   ))}
                 </select>
               </label>
-              <label>
+              <label style={{display:'flex', flexDirection:'column', flex: '0 1 220px', minWidth:182}}>
                 <div className="muted">Target option</div>
                 <select value={rollSymbol} onChange={(e)=>setRollSymbol(e.target.value)} disabled={rollIdx==='' || !rollExpiry}>
                   <option value="">Select strike</option>
@@ -230,8 +230,12 @@ export function EditPositionModal({ id, onClose }: Props) {
                   })}
                 </select>
               </label>
-              <div style={{display:'flex', alignItems:'end'}}>
-                <button className="ghost" disabled={rollIdx===''} onClick={()=>{
+              <div style={{display:'flex', alignItems:'flex-end'}}>
+                <button
+                  className="ghost"
+                  style={{border:'2px solid var(--border-strong, var(--border))'}}
+                  disabled={rollIdx===''}
+                  onClick={()=>{
                   if (rollIdx==='') return; const idx = Number(rollIdx); const src = draft[idx]; if (!src) return;
                   // close leg
                   const closeLeg = { ...src, side: (src.side==='short' ? 'long' as const : 'short' as const) };
@@ -245,23 +249,23 @@ export function EditPositionModal({ id, onClose }: Props) {
               </div>
             </div>
           </div>
-          <div className="muted" style={{marginBottom:6}}>Add leg</div>
-          <div className="grid" style={{gridTemplateColumns:'repeat(5, 1fr)', gap:8}}>
-            <label>
+            <div className="muted" style={{marginBottom:6}}>Add leg</div>
+          <div style={{display:'flex', flexWrap:'nowrap', alignItems:'flex-end', gap:8}}>
+            <label style={{display:'flex', flexDirection:'column', minWidth:110}}>
               <div className="muted">Type</div>
               <select value={optType} onChange={(e)=>{ setOptType(e.target.value as OptionType); setExpiry(''); setSymbol(''); }}>
                 <option value="P">PUT</option>
                 <option value="C">CALL</option>
               </select>
             </label>
-            <label>
+            <label style={{display:'flex', flexDirection:'column', minWidth:150}}>
               <div className="muted">Expiry</div>
               <select value={expiry} onChange={(e)=>{ const v=e.target.value; setExpiry(v===''?'':Number(v)); setSymbol(''); }}>
                 <option value="">Select expiry</option>
                 {expiries.map(ms => <option key={ms} value={ms}>{new Date(ms).toISOString().slice(0,10)}</option>)}
               </select>
             </label>
-            <label>
+            <label style={{display:'flex', flexDirection:'column', flex:'0 1 220px', minWidth:182}}>
               <div className="muted">Option</div>
               <select value={symbol} onChange={(e)=>setSymbol(e.target.value)} disabled={!expiry}>
                 <option value="">Select strike</option>
@@ -287,34 +291,39 @@ export function EditPositionModal({ id, onClose }: Props) {
                 })}
               </select>
             </label>
-            <label>
+            <label style={{display:'flex', flexDirection:'column', minWidth:110}}>
               <div className="muted">Side</div>
               <select value={side} onChange={(e)=>setSide(e.target.value as 'short'|'long')}>
                 <option value="short">Short</option>
                 <option value="long">Long</option>
               </select>
             </label>
-            <label>
+            <label style={{display:'flex', flexDirection:'column', flex:'0 0 55px'}}>
               <div className="muted">Qty</div>
-              <input type="number" min={0.1} step={0.1} value={qty} onChange={(e)=>setQty(Math.max(0.1, Number(e.target.value)||0.1))} />
+              <input style={{width:'100%'}} type="number" min={0.1} step={0.1} value={qty} onChange={(e)=>setQty(Math.max(0.1, Number(e.target.value)||0.1))} />
             </label>
-            <div style={{gridColumn:'1 / -1'}}>
-              <button className="ghost" onClick={addLeg} disabled={!symbol}>Add leg</button>
+            <div style={{display:'flex', alignItems:'flex-end', marginLeft:20}}>
+              <button
+                className="ghost"
+                style={{border:'2px solid var(--border-strong, var(--border))'}}
+                onClick={addLeg}
+                disabled={!symbol}
+              >Add leg</button>
             </div>
           </div>
           <div style={{marginTop:12}}>
             <div className="muted" style={{marginBottom:6}}>Add perpetual</div>
-            <div className="grid" style={{gridTemplateColumns:'repeat(4, 1fr)', gap:8}}>
-              <label>
+            <div style={{display:'flex', flexWrap:'nowrap', alignItems:'flex-end', gap:8}}>
+              <label style={{display:'flex', flexDirection:'column', minWidth:110}}>
                 <div className="muted">Side</div>
                 <select value={perpSide} onChange={(e)=>setPerpSide(e.target.value as 'short'|'long')}>
                   <option value="short">Short</option>
                   <option value="long">Long</option>
                 </select>
               </label>
-              <label>
+              <label style={{display:'flex', flexDirection:'column', minWidth:220}}>
                 <div className="muted">Qty</div>
-                <div style={{display:'flex', gap:6}}>
+                <div style={{display:'flex', gap:6, alignItems:'center'}}>
                   <input
                     type="number"
                     min={perpMode === 'contracts' ? 0.0001 : 0.01}
@@ -354,8 +363,13 @@ export function EditPositionModal({ id, onClose }: Props) {
                   </select>
                 </div>
               </label>
-              <div style={{display:'flex', alignItems:'end'}}>
-                <button className="ghost" onClick={addPerpLeg} disabled={!canAddPerp}>
+              <div style={{display:'flex', alignItems:'flex-end'}}>
+                <button
+                  className="ghost"
+                  style={{border:'2px solid var(--border-strong, var(--border))'}}
+                  onClick={addPerpLeg}
+                  disabled={!canAddPerp}
+                >
                   Add Perp (ETHUSDT)
                 </button>
               </div>

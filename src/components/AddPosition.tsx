@@ -1,6 +1,7 @@
 import React from 'react';
-import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk, fetchOrderbookL1 } from '../services/bybit';
+import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk, fetchOrderbookL1, fetchSpotEth } from '../services/bybit';
 import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
+import { useSlowMode } from '../contexts/SlowModeContext';
 import { useStore } from '../store/store';
 import type { InstrumentInfo, Leg, OptionType, SpreadPosition } from '../utils/types';
 import { ensureUsdtSymbol } from '../utils/symbols';
@@ -32,6 +33,12 @@ export function AddPosition() {
   const [minOI, setMinOI] = React.useState<number>(0);
   const [maxSpread, setMaxSpread] = React.useState<number>(9999);
   const [showAllStrikes, setShowAllStrikes] = React.useState<boolean>(false);
+  const { slowMode, register } = useSlowMode();
+  const mountedRef = React.useRef(true);
+  const chainRef = React.useRef<InstrumentInfo[]>([]);
+  const draftRef = React.useRef<DraftLeg[]>([]);
+
+  React.useEffect(() => () => { mountedRef.current = false; }, []);
 
   React.useEffect(() => {
     let mounted = true;
@@ -45,6 +52,14 @@ export function AddPosition() {
       .finally(() => setLoading(false));
     return () => { mounted = false; };
   }, []);
+
+  React.useEffect(() => {
+    chainRef.current = chain;
+  }, [chain]);
+
+  React.useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
 
   React.useEffect(() => {
     const monthCodes = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
@@ -86,14 +101,84 @@ export function AddPosition() {
     setChain(mk(expiry, optType));
   }, [expiry, instruments, optType, tickers]);
 
-  React.useEffect(() => {
-    let m = true;
-    fetchOptionTickers().then((list) => { if (!m) return; setTickers(Object.fromEntries(list.map(t => [t.symbol, t]))); });
-    return () => { m = false; };
+  const performSlowRefresh = React.useCallback(async () => {
+    const [list, spotData] = await Promise.all([
+      fetchOptionTickers(),
+      fetchSpotEth().catch(() => undefined),
+    ]);
+    if (!mountedRef.current) return;
+    setTickers(prev => {
+      const next = { ...prev } as Record<string, any>;
+      list.forEach((t) => {
+        const sym = t.symbol;
+        const cur = next[sym] || {};
+        const merged: any = { ...cur };
+        const keys = ['bid1Price','ask1Price','markPrice','markIv','indexPrice','delta','gamma','vega','theta','openInterest'];
+        for (const k of keys) {
+          const freshV = (t as any)[k];
+          if (freshV != null && !Number.isNaN(freshV)) merged[k] = freshV;
+        }
+        next[sym] = merged;
+      });
+      if (spotData?.price != null && isFinite(spotData.price)) {
+        const price = Number(spotData.price);
+        const existing = next['ETHUSDT'] || {};
+        next['ETHUSDT'] = {
+          ...existing,
+          markPrice: price,
+          indexPrice: price,
+          bid1Price: existing.bid1Price ?? price,
+          ask1Price: existing.ask1Price ?? price,
+        };
+      }
+      return next;
+    });
+
+    const syms = Array.from(new Set([
+      ...chainRef.current.map((i) => i.symbol),
+      ...draftRef.current.map((d) => d.leg.symbol),
+    ])).slice(0, 200);
+    const chunkSize = 25;
+    for (let i = 0; i < syms.length; i += chunkSize) {
+      const chunk = syms.slice(i, i + chunkSize);
+      const results = await Promise.allSettled(chunk.map(async (sym) => {
+        const { bid, ask } = await fetchOrderbookL1(sym);
+        return { sym, bid, ask };
+      }));
+      if (!mountedRef.current) return;
+      const updates: Record<string, { bid?: number; ask?: number }> = {};
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          const { sym, bid, ask } = result.value;
+          if (bid != null || ask != null) updates[sym] = { bid, ask };
+        }
+      }
+      if (Object.keys(updates).length) {
+        setTickers(prev => {
+          const next = { ...prev } as Record<string, any>;
+          for (const [sym, { bid, ask }] of Object.entries(updates)) {
+            next[sym] = { ...(next[sym] || {}), obBid: bid, obAsk: ask };
+          }
+          return next;
+        });
+      }
+      if (i + chunkSize < syms.length) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
   }, []);
+
+  React.useEffect(() => {
+    (async () => {
+      try {
+        await performSlowRefresh();
+      } catch {}
+    })();
+  }, [performSlowRefresh]);
 
   // REST L1 fallback for visible chain symbols
   React.useEffect(() => {
+    if (slowMode) return;
     let stopped = false;
     const poll = async () => {
       const syms = Array.from(new Set([...chain.map(i=>i.symbol), ...draft.map(d=>d.leg.symbol)])).slice(0, 200);
@@ -108,7 +193,16 @@ export function AddPosition() {
     poll();
     const id = setInterval(poll, 8000);
     return () => { stopped = true; clearInterval(id); };
-  }, [chain, draft]);
+  }, [chain, draft, slowMode]);
+
+  React.useEffect(() => {
+    return register(() => performSlowRefresh());
+  }, [performSlowRefresh, register]);
+
+  React.useEffect(() => {
+    if (!slowMode) return;
+    performSlowRefresh().catch(() => {});
+  }, [performSlowRefresh, slowMode]);
 
   // Load draft from localStorage
   React.useEffect(() => {
@@ -156,6 +250,7 @@ export function AddPosition() {
 
   // Live pricing in dropdown and draft
   React.useEffect(() => {
+    if (slowMode) return;
     const symbols = new Set<string>();
     chain.forEach(i => symbols.add(i.symbol));
     draft.forEach(d => symbols.add(d.leg.symbol));
@@ -174,7 +269,7 @@ export function AddPosition() {
       }));
     });
     return () => { unsubs.forEach(u => u()); };
-  }, [chain, draft]);
+  }, [chain, draft, slowMode]);
 
   const expiries = Array.from(new Set(instruments.filter(i => i.optionType === optType).map(i => i.deliveryTime))).sort((a, b) => a - b);
   const filteredChain = React.useMemo(() => {

@@ -1,13 +1,14 @@
 import React from 'react';
 import { useStore } from '../store/store';
 import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
-import { midPrice, bestBidAsk, fetchOptionTickers, fetchHV30, fetchOrderbookL1 } from '../services/bybit';
+import { midPrice, bestBidAsk, fetchOptionTickers, fetchHV30, fetchOrderbookL1, fetchSpotEth } from '../services/bybit';
 import { bsImpliedVol } from '../utils/bs';
 import type { Position, PositionLeg, SpreadPosition } from '../utils/types';
 import { downloadCSV, toCSV } from '../utils/csv';
 import { PositionView } from './PositionView';
 import { EditPositionModal } from './EditPositionModal';
 import { IfModal, IfRule, IfCond, IfOperand, IfSide, IfComparator, IfChain, IfConditionTemplate, migrateRule } from './IfModal';
+import { useSlowMode } from '../contexts/SlowModeContext';
 
 type Row = {
   id: string;
@@ -70,6 +71,7 @@ export function UnifiedPositionsTable() {
   const toggleFavoriteSpread = useStore((s) => s.toggleFavoriteSpread);
   const toggleFavoritePosition = useStore((s) => s.toggleFavoritePosition);
   const [showClosed, setShowClosed] = React.useState(false);
+  const [useExecPnl, setUseExecPnl] = React.useState(false);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
   const [view, setView] = React.useState<Row | null>(null);
   const [editId, setEditId] = React.useState<string | null>(null);
@@ -77,6 +79,8 @@ export function UnifiedPositionsTable() {
   const [tab, setTab] = React.useState<'all'|'fav'>('all');
   const [sortKey, setSortKey] = React.useState<'date'|'pnl'|'theta'|'expiry'>('date');
   const [sortDir, setSortDir] = React.useState<'asc'|'desc'>('desc');
+  const { slowMode, setSlowMode: setGlobalSlowMode, slowStats, manualRefresh, register } = useSlowMode();
+  const rowsRef = React.useRef<Row[]>([]);
   const [hv30, setHv30] = React.useState<number | undefined>();
   const [rPct, setRPct] = React.useState(0);
   const [ifRow, setIfRow] = React.useState<Row | null>(null);
@@ -169,20 +173,27 @@ export function UnifiedPositionsTable() {
   React.useEffect(() => {
     try {
       const raw = localStorage.getItem('positions-ui-v1');
-      if (!raw) return;
-      const s = JSON.parse(raw);
-      if (s?.tab === 'all' || s?.tab === 'fav') setTab(s.tab);
-      if (s?.sortKey === 'date' || s?.sortKey === 'pnl' || s?.sortKey === 'theta' || s?.sortKey === 'expiry') setSortKey(s.sortKey);
-      if (s?.sortDir === 'asc' || s?.sortDir === 'desc') setSortDir(s.sortDir);
-      if (typeof s?.showClosed === 'boolean') setShowClosed(s.showClosed);
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s?.tab === 'all' || s?.tab === 'fav') setTab(s.tab);
+        if (s?.sortKey === 'date' || s?.sortKey === 'pnl' || s?.sortKey === 'theta' || s?.sortKey === 'expiry') setSortKey(s.sortKey);
+        if (s?.sortDir === 'asc' || s?.sortDir === 'desc') setSortDir(s.sortDir);
+        if (typeof s?.showClosed === 'boolean') setShowClosed(s.showClosed);
+        if (typeof s?.useExecPnl === 'boolean') setUseExecPnl(s.useExecPnl);
+        if (typeof s?.slowMode === 'boolean') setGlobalSlowMode(s.slowMode);
+      }
     } catch {}
   }, []);
 
   // Persist UI prefs
   React.useEffect(() => {
-    const payload = { tab, sortKey, sortDir, showClosed };
-    try { localStorage.setItem('positions-ui-v1', JSON.stringify(payload)); } catch {}
-  }, [tab, sortKey, sortDir, showClosed]);
+    const payload = { tab, sortKey, sortDir, showClosed, useExecPnl };
+    try {
+      const raw = localStorage.getItem('positions-ui-v1');
+      const base = raw ? JSON.parse(raw) : {};
+      localStorage.setItem('positions-ui-v1', JSON.stringify({ ...base, ...payload }));
+    } catch {}
+  }, [tab, sortKey, sortDir, showClosed, useExecPnl]);
 
   // Gamma removed from tables
 
@@ -198,6 +209,88 @@ export function UnifiedPositionsTable() {
   }, [spreads, positions, showClosed, tab]);
 
   React.useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+
+  const performSlowRefresh = React.useCallback(async () => {
+    const rowsSnapshot = rowsRef.current;
+    if (!rowsSnapshot.length) return;
+
+    const [list, spotData] = await Promise.all([
+      fetchOptionTickers(),
+      fetchSpotEth().catch(() => undefined),
+    ]);
+    const map = new Map(list.map((t) => [t.symbol, t]));
+
+    setTickers(prev => {
+      const next = { ...prev } as Record<string, any>;
+      rowsSnapshot.forEach(r => r.legs.forEach(l => {
+        const sym = l.leg.symbol;
+        const cur = next[sym] || {};
+        const fresh = map.get(sym) || {};
+        const merged: any = { ...cur };
+        const keys = ['bid1Price','ask1Price','markPrice','markIv','indexPrice','delta','gamma','vega','theta','openInterest'];
+        for (const k of keys) {
+          const freshV = (fresh as any)[k];
+          if (freshV != null && !Number.isNaN(freshV)) merged[k] = freshV;
+        }
+        next[sym] = merged;
+      }));
+      if (spotData?.price != null && isFinite(spotData.price)) {
+        const price = Number(spotData.price);
+        const existing = next['ETHUSDT'] || {};
+        next['ETHUSDT'] = {
+          ...existing,
+          markPrice: price,
+          indexPrice: price,
+          bid1Price: existing.bid1Price ?? price,
+          ask1Price: existing.ask1Price ?? price,
+        };
+      }
+      return next;
+    });
+
+    const syms = Array.from(new Set(rowsSnapshot.flatMap(r => r.legs.map(L => L.leg.symbol)))).slice(0, 200);
+    const chunkSize = 25;
+    for (let i = 0; i < syms.length; i += chunkSize) {
+      const chunk = syms.slice(i, i + chunkSize);
+      const results = await Promise.allSettled(chunk.map(async (sym) => {
+        const { bid, ask } = await fetchOrderbookL1(sym);
+        return { sym, bid, ask };
+      }));
+      const updates: Record<string, { bid?: number; ask?: number }> = {};
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          const { sym, bid, ask } = result.value;
+          if (bid != null || ask != null) updates[sym] = { bid, ask };
+        }
+      }
+      if (Object.keys(updates).length) {
+        setTickers(prev => {
+          const next = { ...prev } as Record<string, any>;
+          for (const [sym, { bid, ask }] of Object.entries(updates)) {
+            next[sym] = { ...(next[sym] || {}), obBid: bid, obAsk: ask };
+          }
+          return next;
+        });
+      }
+      if (i + chunkSize < syms.length) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
+  }, [setTickers]);
+
+  React.useEffect(() => {
+    return register(() => performSlowRefresh());
+  }, [performSlowRefresh, register]);
+
+  React.useEffect(() => {
+    if (!slowMode) return;
+    performSlowRefresh().catch(() => {});
+  }, [performSlowRefresh, slowMode]);
+
+  React.useEffect(() => {
+    if (slowMode) return;
     const symbols = new Set<string>();
     rows.forEach(r => r.legs.forEach(l => symbols.add(l.leg.symbol)));
     const unsubs = Array.from(symbols).slice(0, 1000).map(sym => {
@@ -205,7 +298,6 @@ export function UnifiedPositionsTable() {
       const sub = isOption ? subscribeOptionTicker : subscribeSpotTicker;
       return sub(sym, (t) => setTickers(prev => {
         const cur = prev[t.symbol] || {};
-        // merge without overwriting existing values with undefined/null
         const merged: any = { ...cur };
         const keys: string[] = Object.keys(t as any);
         for (const k of keys) {
@@ -216,7 +308,7 @@ export function UnifiedPositionsTable() {
       }));
     });
     return () => { unsubs.forEach(u => u()); };
-  }, [rows]);
+  }, [rows, slowMode]);
 
   // Fetch HV30 once for Δσ (Vol) reference in expanded legs view
   React.useEffect(() => {
@@ -372,8 +464,10 @@ export function UnifiedPositionsTable() {
     bid?: number;
     ask?: number;
     mid?: number;
+    exec?: number;
     entry?: number;
-    pnlLeg?: number;
+    pnlMid?: number;
+    pnlExec?: number;
     ivPct?: number;
     delta?: number;
     vega?: number;
@@ -395,6 +489,7 @@ export function UnifiedPositionsTable() {
   };
 
   const positionMetricValue = (param: string, ctx: PositionEvalContext): number | undefined => {
+    const pnlValue = useExecPnl ? ctx.calc.pnlExec : ctx.calc.pnl;
     switch (param) {
       case 'spot': return ctx.spot;
       case 'netEntry': return ctx.calc.netEntry;
@@ -405,11 +500,11 @@ export function UnifiedPositionsTable() {
         const ratio = ctx.calc.netMid / entry;
         return Number.isFinite(ratio) ? ratio : undefined;
       }
-      case 'pnl': return ctx.calc.pnl;
+      case 'pnl': return pnlValue;
       case 'pnlPctMax': {
         const mp = ensureMaxProfit(ctx);
         if (!(mp != null && isFinite(mp) && mp > 0)) return undefined;
-        return (ctx.calc.pnl / mp) * 100;
+        return (pnlValue / mp) * 100;
       }
       case 'delta': return ctx.calc.greeks.delta;
       case 'vega': return ctx.calc.greeks.vega;
@@ -422,19 +517,27 @@ export function UnifiedPositionsTable() {
   const buildLegMetrics = (L: PositionLeg, r: Row): LegMetrics => {
     const t = tickers[L.leg.symbol] || {};
     const { bid, ask } = bestBidAsk(t);
-    const mid = midPrice(t);
+    const bidNum = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
+    const askNum = ask != null && isFinite(Number(ask)) ? Number(ask) : undefined;
+    const midRaw = midPrice(t);
+    const mid = midRaw != null && isFinite(Number(midRaw)) ? Number(midRaw) : undefined;
     const entryRaw = Number(L.entryPrice);
     const entry = Number.isFinite(entryRaw) ? entryRaw : undefined;
     const qty = Number(L.qty) || 1;
     const sign = L.side === 'short' ? 1 : -1;
-    const pnlLeg = (entry != null && mid != null && isFinite(mid)) ? sign * (entry - mid) * qty : undefined;
+    const exec = (() => {
+      if (L.side === 'short') return askNum ?? mid;
+      return bidNum ?? mid;
+    })();
+    const pnlMid = (entry != null && mid != null && isFinite(mid)) ? sign * (entry - mid) * qty : undefined;
+    const pnlExec = (entry != null && exec != null && isFinite(exec)) ? sign * (entry - exec) * qty : undefined;
     const delta = t?.delta != null ? (L.side === 'long' ? Number(t.delta) : -Number(t.delta)) : undefined;
     const vega = t?.vega != null ? (L.side === 'long' ? Number(t.vega) : -Number(t.vega)) : undefined;
     const theta = t?.theta != null ? (L.side === 'long' ? Number(t.theta) : -Number(t.theta)) : undefined;
     const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
     const ivPct = ivPctForLeg(L, r);
     const dSigma = dSigmaForLeg(L, r);
-    return { bid, ask, mid, entry, pnlLeg, delta, vega, theta, oi, ivPct, dSigma };
+    return { bid: bidNum, ask: askNum, mid, exec, entry, pnlMid, pnlExec, delta, vega, theta, oi, ivPct, dSigma };
   };
 
   const metricsForSymbol = (ctx: PositionEvalContext, symbol?: string): LegMetrics | undefined => {
@@ -454,8 +557,9 @@ export function UnifiedPositionsTable() {
       case 'bid': return leg.bid;
       case 'ask': return leg.ask;
       case 'mid': return leg.mid;
+      case 'exec': return leg.exec;
       case 'entry': return leg.entry;
-      case 'pnlLeg': return leg.pnlLeg;
+      case 'pnlLeg': return useExecPnl ? leg.pnlExec : leg.pnlMid;
       case 'ivPct': return leg.ivPct;
       case 'vega': return leg.vega;
       case 'delta': return leg.delta;
@@ -632,6 +736,7 @@ export function UnifiedPositionsTable() {
 
   // REST fallback to populate bid/ask for symbols missing them in WS
   React.useEffect(() => {
+    if (slowMode) return;
     let mounted = true;
     const run = async () => {
       try {
@@ -644,7 +749,6 @@ export function UnifiedPositionsTable() {
             const sym = l.leg.symbol;
             const cur = next[sym] || {};
             const fresh: any = map[sym] || {};
-            // Backfill missing fields (iv/greeks/oi/mark) from REST without clobbering existing values
             const merged: any = { ...cur };
             const keys = ['bid1Price','ask1Price','markPrice','markIv','indexPrice','delta','gamma','vega','theta','openInterest'];
             for (const k of keys) {
@@ -661,10 +765,11 @@ export function UnifiedPositionsTable() {
     run();
     const id = setInterval(run, 30000);
     return () => { mounted = false; clearInterval(id); };
-  }, [rows]);
+  }, [rows, slowMode]);
 
   // REST L1 fallback for stubborn symbols (polls small set of visible legs)
   React.useEffect(() => {
+    if (slowMode) return;
     let stopped = false;
     const poll = async () => {
       const syms = Array.from(new Set(rows.flatMap(r => r.legs.map(L => L.leg.symbol)))).slice(0, 120);
@@ -681,13 +786,14 @@ export function UnifiedPositionsTable() {
     poll();
     const id = setInterval(poll, 8000);
     return () => { stopped = true; clearInterval(id); };
-  }, [rows]);
+  }, [rows, slowMode]);
 
   const calc = (r: Row) => {
     // Per-leg live mid and greeks (ignore hidden legs)
     const legs = r.legs.filter(L => !L.hidden).map((L) => {
       const t = tickers[L.leg.symbol] || {};
-      const mid = midPrice(t) ?? 0;
+      const midRaw = midPrice(t);
+      const mid = midRaw != null && isFinite(Number(midRaw)) ? Number(midRaw) : 0;
       const greeks = {
         delta: t?.delta != null ? Number(t.delta) : 0,
         gamma: t?.gamma != null ? Number(t.gamma) : 0,
@@ -695,13 +801,22 @@ export function UnifiedPositionsTable() {
         theta: t?.theta != null ? Number(t.theta) : 0,
       };
       const { bid, ask } = bestBidAsk(t);
-      const spread = bid != null && ask != null && bid > 0 && ask > 0 ? Math.max(0, ask - bid) : undefined;
+      const bidNum = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
+      const askNum = ask != null && isFinite(Number(ask)) ? Number(ask) : undefined;
+      const spread = bidNum != null && askNum != null && bidNum > 0 && askNum > 0 ? Math.max(0, askNum - bidNum) : undefined;
       const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
-      return { ...L, mid, greeks, bid, ask, spread, oi };
+      const entry = Number(L.entryPrice) || 0;
+      const exec = L.side === 'short' ? (askNum ?? mid) : (bidNum ?? mid);
+      const qty = Number(L.qty) || 1;
+      const pnlMid = (L.side === 'short' ? (entry - mid) : (mid - entry)) * qty;
+      const pnlExec = (L.side === 'short' ? (entry - exec) : (exec - entry)) * qty;
+      return { ...L, mid, exec, pnlMid, pnlExec, greeks, bid: bidNum, ask: askNum, spread, oi };
     });
     const netEntry = legs.reduce((a, L) => a + (L.side === 'short' ? 1 : -1) * L.entryPrice * L.qty, 0);
     const netMid = legs.reduce((a, L) => a + (L.side === 'short' ? 1 : -1) * L.mid * L.qty, 0);
+    const netExec = legs.reduce((a, L) => a + (L.side === 'short' ? 1 : -1) * L.exec * L.qty, 0);
     const pnl = netEntry - netMid;
+    const pnlExec = netEntry - netExec;
     const g = legs.reduce((a, L) => {
       const s = L.side === 'long' ? 1 : -1;
       return {
@@ -737,7 +852,7 @@ export function UnifiedPositionsTable() {
       maxLoss = Math.max(0, (width - (r.cEnter ?? 0)) * (r.qty ?? 1));
     }
 
-    return { legs, netEntry, netMid, pnl, greeks: g, liq, width, maxLoss, dte };
+    return { legs, netEntry, netMid, netExec, pnl, pnlExec, greeks: g, liq, width, maxLoss, dte };
   };
 
   const exportCSV = () => {
@@ -811,6 +926,14 @@ export function UnifiedPositionsTable() {
           <span className="muted">Show closed</span>
         </label>
         <button className="ghost" onClick={exportCSV}>Export CSV</button>
+        <label style={{display:'flex', gap:6, alignItems:'center'}}>
+          <input type="checkbox" checked={useExecPnl} onChange={(e) => setUseExecPnl(e.target.checked)} />
+          <span className="muted">PNL($) exec</span>
+        </label>
+        <label style={{display:'flex', gap:6, alignItems:'center'}}>
+          <input type="checkbox" checked={slowMode} onChange={(e) => setGlobalSlowMode(e.target.checked)} />
+          <span className="muted">Slow refresh (15 min)</span>
+        </label>
         <div style={{display:'flex', gap:6, marginLeft: 'auto'}}>
           <button className={tab==='all' ? 'primary' : 'ghost'} onClick={() => setTab('all')}>All</button>
           <button className={tab==='fav' ? 'primary' : 'ghost'} onClick={() => setTab('fav')}>Favorites</button>
@@ -824,6 +947,16 @@ export function UnifiedPositionsTable() {
           <button className="ghost" title={sortDir==='desc' ? 'Descending' : 'Ascending'} onClick={() => setSortDir(d => d==='desc'?'asc':'desc')}>{sortDir==='desc' ? '↓' : '↑'}</button>
         </div>
       </div>
+      {slowMode && (
+        <div style={{display:'flex', alignItems:'center', gap:12, marginBottom: 10, flexWrap:'wrap'}}>
+          <span className="muted">Last update: {slowStats.lastUpdated ? new Date(slowStats.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+          <span className="muted">Next: {slowStats.nextUpdate ? new Date(slowStats.nextUpdate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+          <button className="ghost" onClick={() => { void manualRefresh(); }} disabled={slowStats.refreshing}>
+            {slowStats.refreshing ? 'Refreshing…' : 'Refresh now'}
+          </button>
+          {slowStats.error && <span style={{color:'#c7762b'}}>{slowStats.error}</span>}
+        </div>
+      )}
       <div style={{overflowX: 'auto'}}>
         <table>
           <thead>
@@ -833,7 +966,7 @@ export function UnifiedPositionsTable() {
               <th>Expiry / DTE</th>
               <th>Net entry</th>
               <th>Net mid</th>
-              <th>PnL ($)</th>
+              <th>PnL ($){useExecPnl && <span style={{marginLeft:4, fontSize:'0.75em'}}>exec</span>}</th>
               <th>Δ</th>
               <th>Vega</th>
               <th>Θ ($/day)</th>
@@ -852,7 +985,11 @@ export function UnifiedPositionsTable() {
                 // Then by chosen sort key (desc)
                 const sgn = sortDir === 'desc' ? 1 : -1;
                 if (sortKey === 'date') return sgn * ((B.r.createdAt || 0) - (A.r.createdAt || 0));
-                if (sortKey === 'pnl') return sgn * ((B.c.pnl || 0) - (A.c.pnl || 0));
+                if (sortKey === 'pnl') {
+                  const pnlA = useExecPnl ? A.c.pnlExec : A.c.pnl;
+                  const pnlB = useExecPnl ? B.c.pnlExec : B.c.pnl;
+                  return sgn * ((pnlB || 0) - (pnlA || 0));
+                }
                 if (sortKey === 'theta') return sgn * ((B.c.greeks.theta || 0) - (A.c.greeks.theta || 0));
                 if (sortKey === 'expiry') {
                   const eAarr = A.r.legs.map(L => Number(L.leg.expiryMs)).filter(ms => Number.isFinite(ms) && ms > 0);
@@ -899,7 +1036,7 @@ export function UnifiedPositionsTable() {
                     <td>{expLabel} · {dte}</td>
                     <td>{c.netEntry.toFixed(2)}</td>
                     <td>{c.netMid.toFixed(2)}</td>
-                    <td>{c.pnl.toFixed(2)}</td>
+                    <td>{(useExecPnl ? c.pnlExec : c.pnl).toFixed(2)}</td>
                     <td>{c.greeks.delta.toFixed(3)}</td>
                     <td>{c.greeks.vega.toFixed(3)}</td>
                     <td>{c.greeks.theta.toFixed(3)}</td>
@@ -963,7 +1100,7 @@ export function UnifiedPositionsTable() {
                               <div
                                 key={L.leg.symbol}
                                 style={{
-                                  border: '1px solid var(--border)',
+                                  border: '2px solid #10481B',
                                   borderRadius: 8,
                                   padding: 6,
                                   fontSize: 'calc(1em - 1.5px)',
@@ -1011,7 +1148,7 @@ export function UnifiedPositionsTable() {
                                   <div style={{gridColumn:2, gridRow:1}} className="muted">Bid / Ask</div>
                                   <div style={{gridColumn:3, gridRow:1}} className="muted">Mid</div>
                                   <div style={{gridColumn:4, gridRow:1}} className="muted">Entry</div>
-                                  <div style={{gridColumn:5, gridRow:1}} className="muted">PnL ($)</div>
+                                  <div style={{gridColumn:5, gridRow:1}} className="muted">PnL ($){useExecPnl && <span style={{marginLeft:4, fontSize:'0.75em'}}>e</span>}</div>
                                   <div style={{gridColumn:6, gridRow:1}} className="muted">IV %</div>
                                   {/* Row 3: titles second line */}
                                   <div style={{gridColumn:2, gridRow:3}} className="muted">Vega</div>
@@ -1023,7 +1160,21 @@ export function UnifiedPositionsTable() {
                                   <div style={{gridColumn:2, gridRow:2}}>{bid != null ? bid.toFixed(2) : '—'} / {ask != null ? ask.toFixed(2) : '—'}</div>
                                   <div style={{gridColumn:3, gridRow:2}}>{mid != null ? mid.toFixed(2) : '—'}</div>
                                   <div style={{gridColumn:4, gridRow:2}}>{isFinite(L.entryPrice) ? `$${L.entryPrice.toFixed(2)}` : '—'}</div>
-                                  <div style={{gridColumn:5, gridRow:2}}>{(() => { const sgn2 = L.side === 'short' ? 1 : -1; const entry = Number(L.entryPrice); const m = mid; const qty = Number(L.qty) || 1; const pnl = (isFinite(entry) && m != null && isFinite(m)) ? sgn2 * (entry - m) * qty : undefined; return pnl != null ? pnl.toFixed(2) : '—'; })()}</div>
+                                  <div style={{gridColumn:5, gridRow:2}}>{(() => {
+                                    const entry = Number(L.entryPrice);
+                                    if (!Number.isFinite(entry)) return '—';
+                                    const qty = Number(L.qty) || 1;
+                                    const midVal = typeof mid === 'number' && isFinite(mid) ? mid : undefined;
+                                    const bidVal = typeof bid === 'number' && isFinite(bid) ? bid : undefined;
+                                    const askVal = typeof ask === 'number' && isFinite(ask) ? ask : undefined;
+                                    const isShort = L.side === 'short';
+                                    const close = useExecPnl
+                                      ? (isShort ? (askVal ?? midVal) : (bidVal ?? midVal))
+                                      : midVal;
+                                    if (!(close != null && isFinite(close))) return '—';
+                                    const pnl = isShort ? (entry - close) * qty : (close - entry) * qty;
+                                    return pnl.toFixed(2);
+                                  })()}</div>
                                   <div style={{gridColumn:6, gridRow:2}}>{(() => {
                                     const rawMarkIv = t?.markIv != null ? Number(t.markIv) : (iv != null ? Number(iv) : undefined);
                                     if (rawMarkIv != null && isFinite(rawMarkIv)) {

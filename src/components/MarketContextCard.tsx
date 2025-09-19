@@ -1,6 +1,7 @@
 import React from 'react';
 import { fetchHV30, fetchInstruments, fetchSpotEth, fetchOptionTickers } from '../services/bybit';
 import { subscribeSpotTicker, subscribeOptionTicker } from '../services/ws';
+import { useSlowMode } from '../contexts/SlowModeContext';
 
 function formatPct(v?: number) {
   if (v == null || !isFinite(v)) return '—';
@@ -20,58 +21,96 @@ export function MarketContextCard() {
   const [dte, setDte] = React.useState<number | undefined>();
   const [expiry, setExpiry] = React.useState<number | undefined>();
   const atmSubRef = React.useRef<() => void>();
+  const { slowMode, register } = useSlowMode();
+  const mountedRef = React.useRef(true);
 
-  // Init: instruments, HV, Spot, nearest expiry, initial ATM IV
   React.useEffect(() => {
-    let mounted = true;
+    return () => {
+      mountedRef.current = false;
+      if (atmSubRef.current) {
+        atmSubRef.current();
+        atmSubRef.current = undefined;
+      }
+    };
+  }, []);
+
+  const refreshMarket = React.useCallback(async () => {
+    try {
+      const [instr, hv, spotSnapshot, tickers] = await Promise.all([
+        fetchInstruments(),
+        fetchHV30(),
+        fetchSpotEth(),
+        fetchOptionTickers(),
+      ]);
+      if (!mountedRef.current) return;
+      setHv30(hv);
+      setSpot(spotSnapshot);
+      const future = instr.filter((i) => i.deliveryTime > Date.now()).sort((a, b) => a.deliveryTime - b.deliveryTime);
+      const nearest = future[0];
+      if (nearest) {
+        setExpiry(nearest.deliveryTime);
+        const msLeft = nearest.deliveryTime - Date.now();
+        setDte(Math.max(0, Math.round(msLeft / (1000 * 60 * 60 * 24))));
+        const expSymbols = new Set(instr.filter(i => i.deliveryTime === nearest.deliveryTime).map(i => i.symbol));
+        const chain = tickers.filter(t => expSymbols.has(t.symbol));
+        if (chain.length) {
+          const best = chain
+            .map((t) => ({ t, strike: Number(t.symbol.split('-')[2]) }))
+            .filter((x) => Number.isFinite(x.strike))
+            .sort((a, b) => Math.abs(a.strike - spotSnapshot.price) - Math.abs(b.strike - spotSnapshot.price))[0]?.t;
+          if (best?.markIv != null) setAtmIv(Number(best.markIv));
+        }
+      } else {
+        setExpiry(undefined);
+        setDte(undefined);
+      }
+      setError(null);
+    } catch (err) {
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : 'Failed to refresh market data');
+      }
+      throw err;
+    }
+  }, []);
+
+  React.useEffect(() => {
+    return register(() => refreshMarket());
+  }, [refreshMarket, register]);
+
+  React.useEffect(() => {
+    if (!slowMode) return;
+    refreshMarket().catch(() => {});
+  }, [refreshMarket, slowMode]);
+
+  // Init: fetch snapshot immediately
+  React.useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         setLoading(true);
-        const [instr, hv, spot_, tickers] = await Promise.all([
-          fetchInstruments(),
-          fetchHV30(),
-          fetchSpotEth(),
-          fetchOptionTickers()
-        ]);
-        if (!mounted) return;
-        setHv30(hv);
-        setSpot(spot_);
-        const future = instr.filter((i) => i.deliveryTime > Date.now()).sort((a, b) => a.deliveryTime - b.deliveryTime);
-        const nearest = future[0];
-        if (nearest) {
-          setExpiry(nearest.deliveryTime);
-          const msLeft = nearest.deliveryTime - Date.now();
-          setDte(Math.max(0, Math.round(msLeft / (1000 * 60 * 60 * 24))));
-          // initial ATM IV from REST tickers
-          const expSymbols = new Set(instr.filter(i => i.deliveryTime === nearest.deliveryTime).map(i => i.symbol));
-          const chain = tickers.filter(t => expSymbols.has(t.symbol));
-          if (chain.length) {
-            const best = chain
-              .map((t) => ({ t, strike: Number(t.symbol.split('-')[2]) }))
-              .filter((x) => Number.isFinite(x.strike))
-              .sort((a, b) => Math.abs(a.strike - spot_.price) - Math.abs(b.strike - spot_.price))[0]?.t;
-            if (best?.markIv != null) setAtmIv(Number(best.markIv));
-          }
+        await refreshMarket();
+      } catch {}
+      finally {
+        if (!cancelled && mountedRef.current) {
+          setLoading(false);
         }
-        setError(null);
-      } catch (e: any) {
-        setError(e?.message || 'Failed to init');
-      } finally {
-        setLoading(false);
       }
     })();
-    return () => { mounted = false; };
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshMarket]);
 
   // Live spot via WS (ETHUSDT on spot channel)
   React.useEffect(() => {
+    if (slowMode) return;
     const off = subscribeSpotTicker('ETHUSDT', (t) => {
       const last = t.lastPrice ?? t.markPrice ?? t.bid1Price ?? t.ask1Price;
       const pct = t.price24hPcnt != null ? t.price24hPcnt * 100 : undefined;
       if (last != null) setSpot({ price: last, change24h: pct });
     });
     return () => off();
-  }, []);
+  }, [slowMode]);
 
   // Recompute DTE every hour quietly
   React.useEffect(() => {
@@ -85,6 +124,13 @@ export function MarketContextCard() {
 
   // Subscribe to ATM symbol for IV, tracking when underlying crosses strike boundaries
   React.useEffect(() => {
+    if (slowMode) {
+      if (atmSubRef.current) {
+        atmSubRef.current();
+        atmSubRef.current = undefined;
+      }
+      return;
+    }
     if (!expiry || !spot?.price) return;
     let stop: (() => void) | undefined;
     let cancelled = false;
@@ -98,7 +144,6 @@ export function MarketContextCard() {
           .map(i => ({ i, d: Math.abs(i.strike - spot.price) }))
           .sort((a,b) => a.d - b.d)[0]?.i;
         if (!nearest) return;
-        // subscribe to this symbol
         if (atmSubRef.current) atmSubRef.current();
         stop = subscribeOptionTicker(nearest.symbol, (t) => {
           if (t.markIv != null) setAtmIv(t.markIv);
@@ -110,7 +155,7 @@ export function MarketContextCard() {
       cancelled = true;
       if (stop) stop();
     };
-  }, [expiry, spot?.price]);
+  }, [expiry, slowMode, spot?.price]);
 
   // Fallback: if HV30 is unavailable, show ATM IV as proxy to avoid dash
   React.useEffect(() => {
@@ -119,11 +164,12 @@ export function MarketContextCard() {
 
   // Refresh HV30 periodically (every 10 min)
   React.useEffect(() => {
+    if (slowMode) return;
     const id = setInterval(async () => {
       try { const hv = await fetchHV30(); setHv30(hv); } catch {}
     }, 10 * 60 * 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [slowMode]);
 
   return (
     <div>
