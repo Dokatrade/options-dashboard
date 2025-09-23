@@ -384,7 +384,6 @@ export function AddPosition() {
         entryShort: mShort,
         entryLong: mLong,
         qty,
-        note: `Built via Add Position (${qty}x)`
       };
       addSpread(payload);
       setDraft([]);
@@ -397,7 +396,7 @@ export function AddPosition() {
         qty: d.qty,
         entryPrice: midPrice(tickers[d.leg.symbol]) ?? 0
       }));
-      addPosition({ legs, note: 'Custom position' });
+      addPosition({ legs });
       setDraft([]);
       setStrike('');
     }

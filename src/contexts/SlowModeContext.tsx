@@ -1,6 +1,6 @@
 import React from 'react';
 
-export const SLOW_REFRESH_MS = 15 * 60 * 1000;
+export const SLOW_REFRESH_MS = 5 * 60 * 1000;
 
 export type RefreshReason = 'initial' | 'manual' | 'schedule';
 export type SlowModeStats = {

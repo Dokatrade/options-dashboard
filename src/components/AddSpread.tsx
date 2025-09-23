@@ -121,7 +121,17 @@ export function AddSpread() {
     const mkLeg = (x: InstrumentInfo): Leg => ({ symbol: x.symbol, strike: x.strike, optionType: x.optionType, expiryMs: x.deliveryTime });
     const eShort = midShort != null ? midShort : undefined;
     const eLong = midLong != null ? midLong : undefined;
-    addSpread({ short: mkLeg(s), long: mkLeg(l), cEnter: c, entryShort: eShort, entryLong: eLong, qty: 1, note });
+    const trimmedNote = note.trim();
+    const payload = {
+      short: mkLeg(s),
+      long: mkLeg(l),
+      cEnter: c,
+      entryShort: eShort,
+      entryLong: eLong,
+      qty: 1,
+      ...(trimmedNote.length ? { note: trimmedNote } : {}),
+    };
+    addSpread(payload);
     setShort(''); setLong(''); setCEnter(''); setNote('');
   };
 

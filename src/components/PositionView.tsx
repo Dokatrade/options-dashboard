@@ -4,6 +4,8 @@ import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
 import { midPrice, bestBidAsk, fetchHV30 } from '../services/bybit';
 import { bsPrice, bsImpliedVol } from '../utils/bs';
 
+const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+
 type Props = {
   legs: PositionLeg[];
   createdAt: number;
@@ -267,6 +269,26 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
 
   const netPnlValue = useExecPnl ? calc.pnlExec : calc.pnl;
 
+  const optionPriceAt = React.useCallback((leg: PositionLeg, S: number, nowMs: number): number => {
+    const isPerp = !String(leg.leg.symbol).includes('-');
+    if (isPerp) return S;
+    const t = tickers[leg.leg.symbol] || {};
+    const fallbackIvRaw = hv30 != null ? Number(hv30) : 60;
+    const fallbackIv = isFinite(fallbackIvRaw) ? fallbackIvRaw : 60;
+    const markIvRaw = t?.markIv != null ? Number(t.markIv) : undefined;
+    const baseIvPct = markIvRaw != null && isFinite(markIvRaw) ? markIvRaw : fallbackIv;
+    const expiryMs = Number(leg.leg.expiryMs) || 0;
+    const K = Math.max(Number(leg.leg.strike) || 0, 1e-8);
+    const intrinsic = leg.leg.optionType === 'C' ? Math.max(0, S - K) : Math.max(0, K - S);
+    if (!(expiryMs > nowMs)) return intrinsic;
+    const Tfull = Math.max(0, (expiryMs - nowMs) / YEAR_MS);
+    const timeFrac = Math.min(1, Math.max(0, effTimePos));
+    const T = Math.max(0, Tfull * (1 - timeFrac));
+    if (T <= 1e-8) return intrinsic;
+    const sigma = Math.max(0.0001, (baseIvPct / 100) * (1 + ivShift));
+    return bsPrice(leg.leg.optionType, Math.max(S, 1e-8), K, T, sigma, rPct / 100);
+  }, [tickers, hv30, effTimePos, ivShift, rPct]);
+
   // Expiry PnL extrema (max profit/loss). Uses expiry payoff across S in {0, strikes, large S} with unbounded detection on S→∞.
   const extrema = React.useMemo(() => {
     const strikes = legsCalc.map(l => Number(l.leg.strike) || 0).filter(s => isFinite(s));
@@ -379,19 +401,10 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
       const S0 = Number(calc.spot);
       let v0 = 0;
       for (const L of legsCalc) {
-        const t = tickers[L.leg.symbol] || {};
-        const isPerp = !String(L.leg.symbol).includes('-');
         const sign = L.side === 'short' ? 1 : -1;
-        if (isPerp) {
-          v0 += sign * S0 * (Number(L.qty) || 1);
-        } else {
-          const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
-          const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
-          const Tfull = Math.max(0, (Number(L.leg.expiryMs) - tNow) / (365 * 24 * 60 * 60 * 1000));
-          const T = Math.max(0, Tfull * (1 - Math.min(1, Math.max(0, effTimePos))));
-          const price = bsPrice(L.leg.optionType, S0, Number(L.leg.strike) || 0, T, sigma, rPct / 100);
-          v0 += sign * price * (Number(L.qty) || 1);
-        }
+        const qty = Number(L.qty) || 1;
+        const price = optionPriceAt(L, S0, tNow);
+        v0 += sign * price * qty;
       }
       const model0 = calc.netEntry - v0;
       const actual0 = calc.netEntry - netClose;
@@ -401,19 +414,10 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
     const nowVals = (latestMs > 0 && dteDays0 > 0) ? xs.map(S => {
       let valNow = 0;
       for (const L of legsCalc) {
-        const t = tickers[L.leg.symbol] || {};
-        const isPerp = !String(L.leg.symbol).includes('-');
         const sign = L.side === 'short' ? 1 : -1;
-        if (isPerp) {
-          valNow += sign * S * (Number(L.qty) || 1);
-        } else {
-          const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
-          const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
-          const Tfull = Math.max(0, (Number(L.leg.expiryMs) - tNow) / (365 * 24 * 60 * 60 * 1000));
-          const T = Math.max(0, Tfull * (1 - Math.min(1, Math.max(0, effTimePos))));
-          const price = bsPrice(L.leg.optionType, S, Number(L.leg.strike) || 0, T, sigma, rPct / 100);
-          valNow += sign * price * (Number(L.qty) || 1);
-        }
+        const qty = Number(L.qty) || 1;
+        const price = optionPriceAt(L, S, tNow);
+        valNow += sign * price * qty;
       }
       return (calc.netEntry - valNow) + anchorOffset;
     }) : undefined;
@@ -522,7 +526,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
       return out;
     })();
     return { W, H, x0, x1, y0, y1, minX, maxX, xScale, yScale, path, nowPath, xTicks, yTicks, yZero: yScale(0), beCoords, beNowCoords, bands };
-  }, [legs, calc.netEntry, calc.netMid, calc.netExec, tickers, ivShift, effTimePos, minTimePos, rPct, hv30, xZoom, yZoom, useExecPnl]);
+  }, [legs, calc.netEntry, calc.netMid, calc.netExec, effTimePos, minTimePos, xZoom, yZoom, useExecPnl, optionPriceAt]);
 
   // Screenshot functionality removed per request
 
@@ -626,19 +630,10 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                    if (!(latestMs > 0) || Date.now() >= latestMs) return undefined;
                    let valNow = 0; const tNow = Date.now();
                    for (const L of legsCalc) {
-                     const t = tickers[L.leg.symbol] || {};
-                     const isPerp = !String(L.leg.symbol).includes('-');
                      const sign = L.side === 'short' ? 1 : -1;
-                     if (isPerp) {
-                       valNow += sign * S * (Number(L.qty) || 1);
-                     } else {
-                       const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
-                       const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
-                       const Tfull = Math.max(0, (Number(L.leg.expiryMs) - tNow) / (365 * 24 * 60 * 60 * 1000));
-                       const T = Math.max(0, Tfull * (1 - Math.min(1, Math.max(0, effTimePos))));
-                       const price = bsPrice(L.leg.optionType, S, Number(L.leg.strike) || 0, T, sigma, rPct / 100);
-                       valNow += sign * price * (Number(L.qty) || 1);
-                     }
+                     const qty = Number(L.qty) || 1;
+                     const price = optionPriceAt(L, S, tNow);
+                     valNow += sign * price * qty;
                    }
                    // Anchor offset so crosshair 'Today' value matches actual PnL at spot,
                    // and decays to 0 as we approach expiry
@@ -647,19 +642,10 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                      const S0 = Number(calc.spot);
                      let v0 = 0; const tNow2 = Date.now();
                      for (const L of legsCalc) {
-                       const t = tickers[L.leg.symbol] || {};
-                       const isPerp = !String(L.leg.symbol).includes('-');
                        const sign = L.side === 'short' ? 1 : -1;
-                       if (isPerp) {
-                         v0 += sign * S0 * (Number(L.qty) || 1);
-                       } else {
-                         const baseIvPct = t?.markIv != null ? Number(t.markIv) : (hv30 != null ? hv30 : 60);
-                         const sigma = Math.max(0.0001, (baseIvPct * (1 + ivShift)) / 100);
-                         const Tfull = Math.max(0, (Number(L.leg.expiryMs) - tNow2) / (365 * 24 * 60 * 60 * 1000));
-                         const T = Math.max(0, Tfull * (1 - Math.min(1, Math.max(0, effTimePos))));
-                         const price = bsPrice(L.leg.optionType, S0, Number(L.leg.strike) || 0, T, sigma, rPct / 100);
-                         v0 += sign * price * (Number(L.qty) || 1);
-                       }
+                       const qty = Number(L.qty) || 1;
+                       const price = optionPriceAt(L, S0, tNow2);
+                       v0 += sign * price * qty;
                      }
                      const modelPnL0 = calc.netEntry - v0;
                      const netClose = useExecPnl ? calc.netExec : calc.netMid;

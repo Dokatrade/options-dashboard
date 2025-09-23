@@ -13,6 +13,7 @@ type State = {
   closePosition: (id: string) => void;
   remove: (id: string) => void;
   removePosition: (id: string) => void;
+  updateSpread: (id: string, updater: (s: SpreadPosition) => SpreadPosition) => void;
   updatePosition: (id: string, updater: (p: Position) => Position) => void;
   setDeposit: (v: number) => void;
   importState: (data: { spreads?: any[]; positions?: any[]; settings?: Partial<PortfolioSettings> }) => { ok: boolean; error?: string };
@@ -58,6 +59,7 @@ export const useStore = create<State>()(
       })),
       remove: (id) => set((st) => ({ spreads: st.spreads.filter((p) => p.id !== id) })),
       removePosition: (id) => set((st) => ({ positions: st.positions.filter((p) => p.id !== id) })),
+      updateSpread: (id, updater) => set((st) => ({ spreads: st.spreads.map((p) => (p.id === id ? updater(p) : p)) })),
       updatePosition: (id, updater) => set((st) => ({ positions: st.positions.map((p) => (p.id === id ? updater(p) : p)) })),
       setDeposit: (v) => set((st) => ({ settings: { ...st.settings, depositUsd: v } })),
       toggleFavoriteSpread: (id) => set((st) => ({ spreads: st.spreads.map((p) => (p.id === id ? { ...p, favorite: !p.favorite } : p)) })),

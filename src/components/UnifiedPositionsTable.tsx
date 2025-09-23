@@ -66,6 +66,7 @@ export function UnifiedPositionsTable() {
   const closePosition = useStore((s) => s.closePosition);
   const removeSpread = useStore((s) => s.remove);
   const removePosition = useStore((s) => s.removePosition);
+  const updateSpread = useStore((s) => s.updateSpread);
   const updatePosition = useStore((s) => s.updatePosition);
   const addPosition = useStore((s) => s.addPosition);
   const toggleFavoriteSpread = useStore((s) => s.toggleFavoriteSpread);
@@ -76,6 +77,8 @@ export function UnifiedPositionsTable() {
   const [view, setView] = React.useState<Row | null>(null);
   const [editId, setEditId] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
+  const [noteRow, setNoteRow] = React.useState<Row | null>(null);
+  const [noteDraft, setNoteDraft] = React.useState('');
   const [tab, setTab] = React.useState<'all'|'fav'>('all');
   const [sortKey, setSortKey] = React.useState<'date'|'pnl'|'theta'|'expiry'>('date');
   const [sortDir, setSortDir] = React.useState<'asc'|'desc'>('desc');
@@ -168,6 +171,44 @@ export function UnifiedPositionsTable() {
       } catch {}
     }
   }, [addPosition, removeSpread]);
+
+  const openNotes = React.useCallback((target: Row) => {
+    if (!target) return;
+    setNoteRow(target);
+    setNoteDraft(target.note ?? '');
+  }, []);
+
+  const closeNotes = React.useCallback(() => {
+    setNoteRow(null);
+    setNoteDraft('');
+  }, []);
+
+  React.useEffect(() => {
+    if (!noteRow) return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeNotes();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [noteRow, closeNotes]);
+
+  const saveNotes = React.useCallback(() => {
+    if (!noteRow) return;
+    const trimmed = noteDraft.trim();
+    const noteValue = trimmed.length ? trimmed : undefined;
+    const rowId = noteRow.id;
+    if (rowId.startsWith('S:')) {
+      updateSpread(rowId.slice(2), (spread) => ({ ...spread, note: noteValue }));
+    } else if (rowId.startsWith('P:')) {
+      updatePosition(rowId.slice(2), (position) => ({ ...position, note: noteValue }));
+    }
+    setView((current) => current && current.id === rowId ? { ...current, note: noteValue } : current);
+    setNoteRow(null);
+    setNoteDraft('');
+  }, [noteDraft, noteRow, setView, updatePosition, updateSpread]);
 
   // Load persisted UI prefs
   React.useEffect(() => {
@@ -970,7 +1011,7 @@ export function UnifiedPositionsTable() {
         </label>
         <label style={{display:'flex', gap:6, alignItems:'center'}}>
           <input type="checkbox" checked={slowMode} onChange={(e) => setGlobalSlowMode(e.target.checked)} />
-          <span className="muted">Slow refresh (15 min)</span>
+          <span className="muted">Slow refresh (5 min)</span>
         </label>
         <div style={{display:'flex', gap:6, marginLeft: 'auto'}}>
           <button className={tab==='all' ? 'primary' : 'ghost'} onClick={() => setTab('all')}>All</button>
@@ -1045,11 +1086,28 @@ export function UnifiedPositionsTable() {
               const expLabel = expiries.length === 1 ? new Date(expiries[0]).toISOString().slice(0,10) : (expiries.length > 1 ? 'mixed' : '—');
               const dte = c.dte != null ? `${c.dte}d` : (expiries.length === 1 ? `${Math.max(0, Math.round((expiries[0]-Date.now())/(86400000)))}d` : '—');
               const typeLabel = strategyName(r.legs);
+              const hasNote = typeof r.note === 'string' && r.note.trim().length > 0;
+              const pnlValue = useExecPnl ? c.pnlExec : c.pnl;
+              const pnlColor = pnlValue > 0 ? 'var(--gain)' : (pnlValue < 0 ? 'var(--loss)' : undefined);
               return (
                 <>
                   <tr key={r.id} style={evalRes.matched ? { background:'rgba(64,64,64,.30)' } : undefined}>
                     <td style={r.favorite ? { borderLeft: '3px solid rgba(255, 215, 0, 0.5)', paddingLeft: 6 } : undefined}>
                       {typeLabel}
+                      {hasNote && (
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            background: 'rgba(128, 128, 128, 0.2)',
+                            color: '#2f855a',
+                            padding: '1px 6px',
+                            borderRadius: 8,
+                            fontSize: 'calc(1em - 3px)',
+                            textTransform: 'lowercase',
+                            fontWeight: 600,
+                          }}
+                        >notes</span>
+                      )}
                       {r.closedAt && (
                         <span style={{ marginLeft: 8, background: 'rgba(128,128,128,.18)', color: '#7a7a7a', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>closed</span>
                       )}
@@ -1074,7 +1132,7 @@ export function UnifiedPositionsTable() {
                     <td>{expLabel} · {dte}</td>
                     <td>{c.netEntry.toFixed(2)}</td>
                     <td>{c.netMid.toFixed(2)}</td>
-                    <td>{(useExecPnl ? c.pnlExec : c.pnl).toFixed(2)}</td>
+                    <td style={pnlColor ? { color: pnlColor } : undefined}>{pnlValue.toFixed(2)}</td>
                     <td>{c.greeks.delta.toFixed(3)}</td>
                     <td>{c.greeks.vega.toFixed(3)}</td>
                     <td>{c.greeks.theta.toFixed(3)}</td>
@@ -1109,8 +1167,14 @@ export function UnifiedPositionsTable() {
                         </div>
                         <div style={{display:'flex', alignItems:'center', gap:6}}>
                           <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} title="IF" onClick={() => setIfRow(r)}>IF</button>
+                          <button
+                            className="ghost"
+                            style={{height: 28, lineHeight: '28px', padding: '0 10px'}}
+                            title="Notes"
+                            onClick={() => openNotes(r)}
+                          >📓</button>
                           <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Close this item?')) onCloseRow(r); }}>Close</button>
-                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Delete this item? This cannot be undone.')) onDeleteRow(r); }}>Delete</button>
+                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Delete this item? This cannot be undone.')) onDeleteRow(r); }}>Del</button>
                         </div>
                       </div>
                     </td>
@@ -1211,7 +1275,8 @@ export function UnifiedPositionsTable() {
                                       : midVal;
                                     if (!(close != null && isFinite(close))) return '—';
                                     const pnl = isShort ? (entry - close) * qty : (close - entry) * qty;
-                                    return pnl.toFixed(2);
+                                    const color = pnl > 0 ? 'var(--gain)' : (pnl < 0 ? 'var(--loss)' : undefined);
+                                    return <span style={color ? { color } : undefined}>{pnl.toFixed(2)}</span>;
                                   })()}</div>
                                   <div style={{gridColumn:6, gridRow:2}}>{(() => {
                                     const rawMarkIv = t?.markIv != null ? Number(t.markIv) : (iv != null ? Number(iv) : undefined);
@@ -1344,6 +1409,32 @@ export function UnifiedPositionsTable() {
             }
           }}
         />
+      )}
+      {noteRow && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, overflowY: 'auto' }}
+        >
+          <div style={{ background: 'var(--card)', color: 'var(--fg)', border: '1px solid var(--border)', borderRadius: 12, width: 420, maxWidth: '95%', maxHeight: '90vh', boxShadow: '0 10px 24px rgba(0,0,0,.35)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderBottom: '1px solid var(--border)' }}>
+              <strong>Notes · {strategyName(noteRow.legs)}</strong>
+              <button className="ghost" onClick={closeNotes}>Close</button>
+            </div>
+            <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
+              <div style={{ flex: 1, minHeight: 0, paddingLeft: 4, paddingRight: 4 }}>
+                <textarea
+                  value={noteDraft}
+                  onChange={(e) => setNoteDraft(e.target.value)}
+                  placeholder="Add your comments"
+                  style={{ width: '100%', height: '100%', minHeight: 160, resize: 'none', borderRadius: 8, border: '1px solid var(--border)', padding: 10, fontFamily: 'inherit', fontSize: '1em', background: 'var(--surface)', color: 'var(--fg)', overflow: 'auto', boxSizing: 'border-box' }}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button className="ghost" onClick={closeNotes}>Cancel</button>
+                <button className="primary" onClick={saveNotes}>Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
       {ifRow && (
         <IfModal
