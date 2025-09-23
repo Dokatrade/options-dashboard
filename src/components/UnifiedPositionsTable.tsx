@@ -2,6 +2,7 @@ import React from 'react';
 import { useStore } from '../store/store';
 import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
 import { midPrice, bestBidAsk, fetchOptionTickers, fetchHV30, fetchOrderbookL1, fetchSpotEth } from '../services/bybit';
+import type { HV30Stats } from '../services/bybit';
 import { bsImpliedVol } from '../utils/bs';
 import type { Position, PositionLeg, SpreadPosition } from '../utils/types';
 import { downloadCSV, toCSV } from '../utils/csv';
@@ -21,6 +22,53 @@ type Row = {
   cEnter?: number; // per contract
   qty?: number;
   favorite?: boolean;
+};
+
+type ColumnKey =
+  | 'type'
+  | 'legs'
+  | 'expiry'
+  | 'netEntry'
+  | 'netMid'
+  | 'pnl'
+  | 'delta'
+  | 'gamma'
+  | 'vega'
+  | 'theta'
+  | 'liquidity'
+  | 'actions';
+
+const COLUMN_CONFIG: Array<{ key: ColumnKey; label: string }> = [
+  { key: 'type', label: 'Type' },
+  { key: 'legs', label: 'Legs' },
+  { key: 'expiry', label: 'Expiry / DTE' },
+  { key: 'netEntry', label: 'Net entry' },
+  { key: 'netMid', label: 'Net mid' },
+  { key: 'pnl', label: 'PnL ($)' },
+  { key: 'delta', label: 'Delta' },
+  { key: 'gamma', label: 'Gamma' },
+  { key: 'vega', label: 'Vega' },
+  { key: 'theta', label: 'Theta, $/day' },
+  { key: 'liquidity', label: 'Liquidity' },
+  { key: 'actions', label: 'Actions' },
+];
+
+const typeColumnStyle: React.CSSProperties = {
+  minWidth: 120,
+  maxWidth: 240,
+  whiteSpace: 'normal',
+  overflowWrap: 'anywhere',
+};
+
+const typeCellContentStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  flexWrap: 'wrap',
+};
+
+const legsColumnStyle: React.CSSProperties = {
+  minWidth: 60,
 };
 
 function fromSpread(s: SpreadPosition): Row {
@@ -84,7 +132,7 @@ export function UnifiedPositionsTable() {
   const [sortDir, setSortDir] = React.useState<'asc'|'desc'>('desc');
   const { slowMode, setSlowMode: setGlobalSlowMode, slowStats, manualRefresh, register } = useSlowMode();
   const rowsRef = React.useRef<Row[]>([]);
-  const [hv30, setHv30] = React.useState<number | undefined>();
+  const [hvStats, setHvStats] = React.useState<HV30Stats | undefined>();
   const [rPct, setRPct] = React.useState(0);
   const [ifRow, setIfRow] = React.useState<Row | null>(null);
   const [ifRules, setIfRules] = React.useState<Record<string, IfRule>>(() => {
@@ -139,6 +187,84 @@ export function UnifiedPositionsTable() {
       return [];
     }
   });
+  const [visibleColumns, setVisibleColumns] = React.useState<Record<ColumnKey, boolean>>(() => {
+    const defaults: Record<ColumnKey, boolean> = {} as Record<ColumnKey, boolean>;
+    for (const col of COLUMN_CONFIG) defaults[col.key] = true;
+    return defaults;
+  });
+  const [columnsMenuOpen, setColumnsMenuOpen] = React.useState(false);
+  const columnsMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  const hvSeriesRaw = React.useMemo(() => {
+    if (!hvStats?.series?.length) return [] as number[];
+    return hvStats.series.filter((v) => v != null && isFinite(v)) as number[];
+  }, [hvStats]);
+  const hvNormalization = React.useMemo(() => {
+    if (!hvSeriesRaw.length) {
+      return {
+        factor: 1,
+        latest: hvStats?.latest,
+      };
+    }
+    const shouldScale = hvSeriesRaw.every((v) => Math.abs(v) <= 5);
+    const factor = shouldScale ? 100 : 1;
+    const latestRaw = hvStats?.latest;
+    return {
+      factor,
+      latest: latestRaw != null && isFinite(latestRaw) ? latestRaw * factor : latestRaw,
+    };
+  }, [hvSeriesRaw, hvStats]);
+  const hvLatest = hvNormalization.latest;
+
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem('positions-columns-v1');
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return;
+      setVisibleColumns((prev) => {
+        const next = { ...prev };
+        for (const col of COLUMN_CONFIG) {
+          const stored = (parsed as Record<string, unknown>)[col.key];
+          if (typeof stored === 'boolean') next[col.key] = stored;
+        }
+        if (!COLUMN_CONFIG.some((col) => next[col.key])) {
+          for (const col of COLUMN_CONFIG) next[col.key] = true;
+        }
+        return next;
+      });
+    } catch {}
+  }, []);
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('positions-columns-v1', JSON.stringify(visibleColumns));
+    } catch {}
+  }, [visibleColumns]);
+
+  React.useEffect(() => {
+    if (!columnsMenuOpen) return;
+    const handleClick = (event: MouseEvent) => {
+      if (!columnsMenuRef.current) return;
+      if (!columnsMenuRef.current.contains(event.target as Node)) {
+        setColumnsMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [columnsMenuOpen]);
+
+  const visibleColumnCount = React.useMemo(() => {
+    return COLUMN_CONFIG.reduce((acc, col) => acc + (visibleColumns[col.key] ? 1 : 0), 0) || COLUMN_CONFIG.length;
+  }, [visibleColumns]);
+
+  const handleColumnToggle = React.useCallback((key: ColumnKey) => {
+    setVisibleColumns((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      const anyVisible = COLUMN_CONFIG.some((col) => next[col.key]);
+      return anyVisible ? next : prev;
+    });
+  }, []);
 
   const handleSaveTemplate = React.useCallback((tpl: IfConditionTemplate) => {
     setIfTemplates((prev) => {
@@ -389,10 +515,10 @@ export function UnifiedPositionsTable() {
     return () => { unsubs.forEach(u => u()); };
   }, [rows, slowMode]);
 
-  // Fetch HV30 once for Δσ (Vol) reference in expanded legs view
+  // Fetch HV30 once for IV comparisons
   React.useEffect(() => {
     let mounted = true;
-    fetchHV30().then(v => { if (mounted) setHv30(v); }).catch(()=>{});
+    fetchHV30().then(v => { if (mounted) setHvStats(v); }).catch(()=>{});
     return () => { mounted = false; };
   }, []);
   // Subscribe real spot (ETHUSDT) for IF rules only
@@ -461,7 +587,7 @@ export function UnifiedPositionsTable() {
       const iv = bsImpliedVol(L.leg.optionType, S, K, T, mid, rPct / 100);
       if (iv != null && isFinite(iv)) return iv * 100;
     }
-    const v = hv30;
+    const v = hvLatest;
     return (v != null && isFinite(v)) ? Number(v) : undefined;
   };
   const dSigmaForLeg = (L: PositionLeg, r: Row): number | undefined => {
@@ -486,7 +612,7 @@ export function UnifiedPositionsTable() {
       else if (ivBid != null && isFinite(ivBid)) sigmaFromBook = ivBid;
       else if (ivAsk != null && isFinite(ivAsk)) sigmaFromBook = ivAsk;
     }
-    const sigmaFromHV = (hv30 != null && isFinite(hv30)) ? (Number(hv30) / 100) : undefined;
+    const sigmaFromHV = (hvLatest != null && isFinite(hvLatest)) ? (Number(hvLatest) / 100) : undefined;
     const sigmaRef = sigmaFromMarkIv ?? sigmaFromMarkPrice ?? sigmaFromBook ?? sigmaFromHV;
     if (!(ivMid != null && isFinite(ivMid) && sigmaRef != null && isFinite(sigmaRef))) return undefined;
     const dSigmaPp = (ivMid - sigmaRef) * 100;
@@ -931,7 +1057,19 @@ export function UnifiedPositionsTable() {
       maxLoss = Math.max(0, (width - (r.cEnter ?? 0)) * (r.qty ?? 1));
     }
 
-    return { legs, netEntry, netMid, netExec, pnl, pnlExec, greeks: g, liq, width, maxLoss, dte };
+    return {
+      legs,
+      netEntry,
+      netMid,
+      netExec,
+      pnl,
+      pnlExec,
+      greeks: g,
+      liq,
+      width,
+      maxLoss,
+      dte,
+    };
   };
 
   const exportCSV = () => {
@@ -946,6 +1084,7 @@ export function UnifiedPositionsTable() {
         netMid: c.netMid.toFixed(2),
         pnl: c.pnl.toFixed(2),
         delta: c.greeks.delta.toFixed(3),
+        gamma: c.greeks.gamma.toFixed(4),
         vega: c.greeks.vega.toFixed(3),
         theta: c.greeks.theta.toFixed(3),
         maxSpread: (c.liq.maxSpread != null && isFinite(c.liq.maxSpread)) ? c.liq.maxSpread.toFixed(2) : '',
@@ -1017,13 +1156,54 @@ export function UnifiedPositionsTable() {
           <button className={tab==='all' ? 'primary' : 'ghost'} onClick={() => setTab('all')}>All</button>
           <button className={tab==='fav' ? 'primary' : 'ghost'} onClick={() => setTab('fav')}>Favorites</button>
         </div>
-        <div style={{display:'flex', gap:6}}>
+        <div style={{display:'flex', gap:6, alignItems:'center'}}>
           <span className="muted">Sort:</span>
           <button className={sortKey==='date' ? 'primary' : 'ghost'} onClick={() => setSortKey('date')}>Date</button>
           <button className={sortKey==='pnl' ? 'primary' : 'ghost'} onClick={() => setSortKey('pnl')}>PnL</button>
           <button className={sortKey==='theta' ? 'primary' : 'ghost'} onClick={() => setSortKey('theta')}>Theta</button>
           <button className={sortKey==='expiry' ? 'primary' : 'ghost'} onClick={() => { setSortKey('expiry'); setSortDir('asc'); }}>Expiry</button>
           <button className="ghost" title={sortDir==='desc' ? 'Descending' : 'Ascending'} onClick={() => setSortDir(d => d==='desc'?'asc':'desc')}>{sortDir==='desc' ? '↓' : '↑'}</button>
+          <div ref={columnsMenuRef} style={{ position: 'relative', marginLeft: 12 }}>
+            <button
+              className="ghost"
+              onClick={() => setColumnsMenuOpen((open) => !open)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 10 }}
+            >
+              Columns
+              <span style={{ fontSize: '0.9em' }}>{columnsMenuOpen ? '▴' : '▾'}</span>
+            </button>
+            {columnsMenuOpen && (
+              <div
+                style={{
+                  position: 'absolute',
+                  right: 0,
+                  top: 'calc(100% + 4px)',
+                  background: 'var(--card)',
+                  color: 'var(--fg)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  boxShadow: '0 12px 24px rgba(0,0,0,.40)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                  minWidth: 180,
+                  zIndex: 40,
+                }}
+              >
+                {COLUMN_CONFIG.map((col) => (
+                  <label key={col.key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.95em' }}>
+                    <input
+                      type="checkbox"
+                      checked={visibleColumns[col.key]}
+                      onChange={() => handleColumnToggle(col.key)}
+                    />
+                    <span>{col.label}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
       {slowMode && (
@@ -1039,18 +1219,24 @@ export function UnifiedPositionsTable() {
       <div style={{overflowX: 'auto'}}>
         <table>
           <thead>
-            <tr>
-              <th>Type</th>
-              <th>Legs</th>
-              <th>Expiry / DTE</th>
-              <th>Net entry</th>
-              <th>Net mid</th>
-              <th>PnL ($){useExecPnl && <span style={{marginLeft:4, fontSize:'0.75em'}}>exec</span>}</th>
-              <th>Δ</th>
-              <th>Vega</th>
-              <th>Θ ($/day)</th>
-              <th>Liquidity</th>
-              <th>Actions</th>
+            <tr style={{ fontSize: 'calc(1em - 2px)' }}>
+              {visibleColumns.type && <th style={typeColumnStyle}>Type</th>}
+              {visibleColumns.legs && <th style={legsColumnStyle}>Legs</th>}
+              {visibleColumns.expiry && <th>Expiry / DTE</th>}
+              {visibleColumns.netEntry && <th>Net entry</th>}
+              {visibleColumns.netMid && <th>Net mid</th>}
+              {visibleColumns.pnl && (
+                <th>
+                  PnL ($)
+                  {useExecPnl && <span style={{ marginLeft: 4, fontSize: '0.75em' }}>exec</span>}
+                </th>
+              )}
+              {visibleColumns.delta && <th>Delta</th>}
+              {visibleColumns.gamma && <th>Gamma</th>}
+              {visibleColumns.vega && <th>Vega</th>}
+              {visibleColumns.theta && <th>Theta, $/day</th>}
+              {visibleColumns.liquidity && <th>Liquidity</th>}
+              {visibleColumns.actions && <th>Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -1092,96 +1278,112 @@ export function UnifiedPositionsTable() {
               return (
                 <>
                   <tr key={r.id} style={evalRes.matched ? { background:'rgba(64,64,64,.30)' } : undefined}>
-                    <td style={r.favorite ? { borderLeft: '3px solid rgba(255, 215, 0, 0.5)', paddingLeft: 6 } : undefined}>
-                      {typeLabel}
-                      {hasNote && (
-                        <span
-                          style={{
-                            marginLeft: 6,
-                            background: 'rgba(128, 128, 128, 0.2)',
-                            color: '#2f855a',
-                            padding: '1px 6px',
-                            borderRadius: 8,
-                            fontSize: 'calc(1em - 3px)',
-                            textTransform: 'lowercase',
-                            fontWeight: 600,
-                          }}
-                        >notes</span>
-                      )}
-                      {r.closedAt && (
-                        <span style={{ marginLeft: 8, background: 'rgba(128,128,128,.18)', color: '#7a7a7a', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>closed</span>
-                      )}
-                      {r.legs.some(L => L.hidden) && (() => {
-                        const hiddenCount = r.legs.reduce((acc, L) => acc + (L.hidden ? 1 : 0), 0);
-                        return (
-                          <span style={{ marginLeft: 6, background: 'rgba(128,128,128,.18)', color: '#7a7a7a', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>hidden ×{hiddenCount}</span>
-                        );
-                      })()}
-                      {(!!ifRules[r.id]?.chains?.length) && (
-                        <span style={{ marginLeft: 6, background: 'rgba(160,120,60,.18)', color: '#8B4513', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>IF</span>
-                      )}
-                    </td>
-                    <td style={{fontSize: 'calc(1em - 1.5px)'}}>
-                      {r.legs.map((L, i) => {
-                        const isPerp = !String(L.leg.symbol).includes('-');
-                        return (
-                          <div key={i} className="muted">{L.side} {isPerp ? 'PERP' : L.leg.optionType} {isPerp ? '' : L.leg.strike} × {L.qty}</div>
-                        );
-                      })}
-                    </td>
-                    <td>{expLabel} · {dte}</td>
-                    <td>{c.netEntry.toFixed(2)}</td>
-                    <td>{c.netMid.toFixed(2)}</td>
-                    <td style={pnlColor ? { color: pnlColor } : undefined}>{pnlValue.toFixed(2)}</td>
-                    <td>{c.greeks.delta.toFixed(3)}</td>
-                    <td>{c.greeks.vega.toFixed(3)}</td>
-                    <td>{c.greeks.theta.toFixed(3)}</td>
-                    <td>
-                      {c.liq.maxSpread != null ? `$${c.liq.maxSpread.toFixed(2)}` : '—'} · OI {c.liq.minOI != null ? c.liq.minOI : '—'}
-                      {(() => {
-                        const sp = c.liq.maxSpreadPct;
-                        const oi = c.liq.minOI;
-                        let label: 'A' | 'B' | 'C' | 'D' = 'D';
-                        if (sp != null && isFinite(sp) && oi != null && isFinite(oi)) {
-                          if (sp < 1 && oi >= 2000) label = 'A';
-                          else if (sp < 2 && oi >= 1000) label = 'B';
-                          else if (sp < 3 && oi >= 300) label = 'C';
-                          else label = 'D';
-                        }
-                        const style: React.CSSProperties = { background: 'rgba(128,128,128,.18)', color: '#7a7a7a' };
-                        return (
-                          <span style={{...style, marginLeft: 8, padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)'}}>{label}</span>
-                        );
-                      })()}
-                    </td>
-                    <td>
-                      <div style={{display:'flex', flexDirection:'column', gap:4}}>
-                        <div style={{display:'flex', alignItems:'center', gap:6}}>
-                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 6px', fontSize: 18}} title={r.favorite ? 'Unfavorite' : 'Favorite'} onClick={() => {
-                            if (r.id.startsWith('S:')) toggleFavoriteSpread(r.id.slice(2));
-                            else toggleFavoritePosition(r.id.slice(2));
-                          }}>{r.favorite ? '★' : '☆'}</button>
-                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 6px', fontSize: 28}} title={expanded[r.id] ? 'Hide legs' : 'Show legs'} onClick={() => setExpanded(prev => ({ ...prev, [r.id]: !prev[r.id] }))}>{expanded[r.id] ? '▴' : '▾'}</button>
-                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => setView(r)}>View</button>
-                          <button className="ghost" onClick={() => openEditRow(r)} style={{height: 28, lineHeight: '28px', padding: '0 10px'}}>Edit</button>
+                    {visibleColumns.type && (
+                      <td
+                        style={r.favorite
+                          ? { ...typeColumnStyle, borderLeft: '3px solid rgba(255, 215, 0, 0.5)', paddingLeft: 6 }
+                          : typeColumnStyle}
+                      >
+                        <div style={typeCellContentStyle}>
+                          <span>{typeLabel}</span>
+                          {hasNote && (
+                            <span
+                              style={{
+                                background: 'rgba(128, 128, 128, 0.2)',
+                                color: '#2f855a',
+                                padding: '1px 6px',
+                                borderRadius: 8,
+                                fontSize: 'calc(1em - 3px)',
+                                textTransform: 'lowercase',
+                                fontWeight: 600,
+                              }}
+                            >notes</span>
+                          )}
+                          {r.closedAt && (
+                            <span style={{ background: 'rgba(128,128,128,.18)', color: '#7a7a7a', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>closed</span>
+                          )}
+                          {r.legs.some(L => L.hidden) && (() => {
+                            const hiddenCount = r.legs.reduce((acc, L) => acc + (L.hidden ? 1 : 0), 0);
+                            return (
+                              <span style={{ background: 'rgba(128,128,128,.18)', color: '#7a7a7a', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>hidden ×{hiddenCount}</span>
+                            );
+                          })()}
+                          {(!!ifRules[r.id]?.chains?.length) && (
+                            <span style={{ background: 'rgba(160,120,60,.18)', color: '#8B4513', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>IF</span>
+                          )}
                         </div>
-                        <div style={{display:'flex', alignItems:'center', gap:6}}>
-                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} title="IF" onClick={() => setIfRow(r)}>IF</button>
-                          <button
-                            className="ghost"
-                            style={{height: 28, lineHeight: '28px', padding: '0 10px'}}
-                            title="Notes"
-                            onClick={() => openNotes(r)}
-                          >📓</button>
-                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Close this item?')) onCloseRow(r); }}>Close</button>
-                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Delete this item? This cannot be undone.')) onDeleteRow(r); }}>Del</button>
+                      </td>
+                    )}
+                    {visibleColumns.legs && (
+                      <td style={{ ...legsColumnStyle, fontSize: 'calc(1em - 1.5px)' }}>
+                        {r.legs.map((L, i) => {
+                          const isPerp = !String(L.leg.symbol).includes('-');
+                          return (
+                            <div key={i} className="muted">{L.side} {isPerp ? 'PERP' : L.leg.optionType} {isPerp ? '' : L.leg.strike} × {L.qty}</div>
+                          );
+                        })}
+                      </td>
+                    )}
+                    {visibleColumns.expiry && <td style={{ fontSize: 'calc(1em - 2px)' }}>{expLabel} · {dte}</td>}
+                    {visibleColumns.netEntry && <td>{c.netEntry.toFixed(2)}</td>}
+                    {visibleColumns.netMid && <td>{c.netMid.toFixed(2)}</td>}
+                    {visibleColumns.pnl && (
+                      <td style={pnlColor ? { color: pnlColor } : undefined}>{pnlValue.toFixed(2)}</td>
+                    )}
+                    {visibleColumns.delta && <td>{c.greeks.delta.toFixed(3)}</td>}
+                    {visibleColumns.gamma && <td>{c.greeks.gamma.toFixed(4)}</td>}
+                    {visibleColumns.vega && <td>{c.greeks.vega.toFixed(3)}</td>}
+                    {visibleColumns.theta && <td>{c.greeks.theta.toFixed(3)}</td>}
+                    {visibleColumns.liquidity && (
+                      <td>
+                        {c.liq.maxSpread != null ? `$${c.liq.maxSpread.toFixed(2)}` : '—'} · OI {c.liq.minOI != null ? c.liq.minOI : '—'}
+                        {(() => {
+                          const sp = c.liq.maxSpreadPct;
+                          const oi = c.liq.minOI;
+                          let label: 'A' | 'B' | 'C' | 'D' = 'D';
+                          if (sp != null && isFinite(sp) && oi != null && isFinite(oi)) {
+                            if (sp < 1 && oi >= 2000) label = 'A';
+                            else if (sp < 2 && oi >= 1000) label = 'B';
+                            else if (sp < 3 && oi >= 300) label = 'C';
+                            else label = 'D';
+                          }
+                          const style: React.CSSProperties = { background: 'rgba(128,128,128,.18)', color: '#7a7a7a' };
+                          return (
+                            <span style={{...style, marginLeft: 8, padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)'}}>{label}</span>
+                          );
+                        })()}
+                      </td>
+                    )}
+                    {visibleColumns.actions && (
+                      <td>
+                        <div style={{display:'flex', flexDirection:'column', gap:4}}>
+                          <div style={{display:'flex', alignItems:'center', gap:6}}>
+                            <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 6px', fontSize: 18}} title={r.favorite ? 'Unfavorite' : 'Favorite'} onClick={() => {
+                              if (r.id.startsWith('S:')) toggleFavoriteSpread(r.id.slice(2));
+                              else toggleFavoritePosition(r.id.slice(2));
+                            }}>{r.favorite ? '★' : '☆'}</button>
+                            <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 6px', fontSize: 28}} title={expanded[r.id] ? 'Hide legs' : 'Show legs'} onClick={() => setExpanded(prev => ({ ...prev, [r.id]: !prev[r.id] }))}>{expanded[r.id] ? '▴' : '▾'}</button>
+                            <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => setView(r)}>View</button>
+                            <button className="ghost" onClick={() => openEditRow(r)} style={{height: 28, lineHeight: '28px', padding: '0 10px'}}>Edit</button>
+                          </div>
+                          <div style={{display:'flex', alignItems:'center', gap:6}}>
+                            <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} title="IF" onClick={() => setIfRow(r)}>IF</button>
+                            <button
+                              className="ghost"
+                              style={{height: 28, lineHeight: '28px', padding: '0 10px'}}
+                              title="Notes"
+                              onClick={() => openNotes(r)}
+                            >📓</button>
+                            <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Close this item?')) onCloseRow(r); }}>Close</button>
+                            <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Delete this item? This cannot be undone.')) onDeleteRow(r); }}>Del</button>
+                          </div>
                         </div>
-                      </div>
-                    </td>
+                      </td>
+                    )}
                   </tr>
                   {expanded[r.id] && (
                     <tr>
-                      <td colSpan={11}>
+                      <td colSpan={visibleColumnCount}>
                         <div className="grid" style={{gap: 6}}>
                           {r.legs.map((L, i) => {
                             const rule = ifRules[r.id];
@@ -1309,7 +1511,7 @@ export function UnifiedPositionsTable() {
                                       const iv = bsImpliedVol(L.leg.optionType, S2, K, T, mid2, rPct / 100);
                                       if (iv != null && isFinite(iv)) return (iv * 100).toFixed(1);
                                     }
-                                    const v = hv30;
+                                    const v = hvLatest;
                                     return v != null && isFinite(v) ? Number(v).toFixed(1) : '—';
                                   })()}</div>
                                   {/* Row 4: values for second line */}
@@ -1339,7 +1541,7 @@ export function UnifiedPositionsTable() {
                                       else if (ivBid != null && isFinite(ivBid)) sigmaFromBook = ivBid;
                                       else if (ivAsk != null && isFinite(ivAsk)) sigmaFromBook = ivAsk;
                                     }
-                                    const sigmaFromHV = (hv30 != null && isFinite(hv30)) ? (Number(hv30) / 100) : undefined;
+                                    const sigmaFromHV = (hvLatest != null && isFinite(hvLatest)) ? (Number(hvLatest) / 100) : undefined;
                                     const sigmaRef = sigmaFromMarkIv ?? sigmaFromMarkPrice ?? sigmaFromBook ?? sigmaFromHV;
                                     if (!(ivMid != null && isFinite(ivMid) && sigmaRef != null && isFinite(sigmaRef))) return '—';
                                     const dSigmaPp = (ivMid - sigmaRef) * 100;

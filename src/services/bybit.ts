@@ -132,7 +132,14 @@ export async function fetchSpotEth(): Promise<{ price: number; change24h?: numbe
   return { price: last, change24h: change };
 }
 
-export async function fetchHV30(): Promise<number | undefined> {
+export type HV30Stats = {
+  latest?: number;
+  min?: number;
+  max?: number;
+  series: number[];
+};
+
+export async function fetchHV30(): Promise<HV30Stats> {
   type Item = { value?: string | number; hv?: string | number; time?: string | number } | [number, number] | [string, string] | any;
   type R = { retCode: number; result?: { list: Item[] } };
   const data = await getJson<R>(`${API}/v5/market/historical-volatility?category=option&baseCoin=ETH&settleCoin=USDT&quoteCoin=USDT&period=30`);
@@ -155,8 +162,16 @@ export async function fetchHV30(): Promise<number | undefined> {
     const n = toNum(v);
     if (Number.isFinite(n)) nums.push(n);
   }
-  if (!nums.length) return undefined;
-  return nums[nums.length - 1];
+  const series = nums.filter((n) => Number.isFinite(n));
+  if (!series.length) return { latest: undefined, min: undefined, max: undefined, series: [] };
+  const latest = series[series.length - 1];
+  let min = series[0];
+  let max = series[0];
+  for (const v of series) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  return { latest, min, max, series };
 }
 
 export function midPrice(t?: Ticker): number | undefined {

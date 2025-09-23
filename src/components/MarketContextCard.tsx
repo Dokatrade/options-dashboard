@@ -34,6 +34,11 @@ export function MarketContextCard() {
     };
   }, []);
 
+  const extractHv = React.useCallback((stats?: { latest?: number }) => {
+    if (!stats || stats.latest == null || !isFinite(stats.latest)) return undefined;
+    return Math.abs(stats.latest) <= 5 ? stats.latest * 100 : stats.latest;
+  }, []);
+
   const refreshMarket = React.useCallback(async () => {
     try {
       const [instr, hv, spotSnapshot, tickers] = await Promise.all([
@@ -43,7 +48,8 @@ export function MarketContextCard() {
         fetchOptionTickers(),
       ]);
       if (!mountedRef.current) return;
-      setHv30(hv);
+      const hvVal = extractHv(hv);
+      if (hvVal != null) setHv30(hvVal);
       setSpot(spotSnapshot);
       const future = instr.filter((i) => i.deliveryTime > Date.now()).sort((a, b) => a.deliveryTime - b.deliveryTime);
       const nearest = future[0];
@@ -71,7 +77,7 @@ export function MarketContextCard() {
       }
       throw err;
     }
-  }, []);
+  }, [extractHv]);
 
   React.useEffect(() => {
     return register(() => refreshMarket());
@@ -166,10 +172,14 @@ export function MarketContextCard() {
   React.useEffect(() => {
     if (slowMode) return;
     const id = setInterval(async () => {
-      try { const hv = await fetchHV30(); setHv30(hv); } catch {}
+      try {
+        const hv = await fetchHV30();
+        const hvVal = extractHv(hv);
+        if (hvVal != null) setHv30(hvVal);
+      } catch {}
     }, 10 * 60 * 1000);
     return () => clearInterval(id);
-  }, [slowMode]);
+  }, [extractHv, slowMode]);
 
   return (
     <div>

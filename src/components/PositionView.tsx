@@ -169,7 +169,16 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
 
   React.useEffect(() => {
     let m = true;
-    fetchHV30().then(v => { if (m) setHv30(v); }).catch(()=>{});
+    fetchHV30()
+      .then((stats) => {
+        if (!m || !stats) return;
+        const latest = stats?.latest;
+        if (latest != null && isFinite(latest)) {
+          const value = Math.abs(latest) <= 5 ? latest * 100 : latest;
+          setHv30(value);
+        }
+      })
+      .catch(() => {});
     return () => { m = false; };
   }, []);
   
