@@ -59,6 +59,7 @@ export interface PositionLeg {
   side: PositionSide;
   qty: number; // contracts
   entryPrice: number; // price per contract at save time
+  createdAt?: number; // ms epoch when the leg was added to the position
   hidden?: boolean; // when true, excluded from all calcs/visuals until unhidden
 }
 

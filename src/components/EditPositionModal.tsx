@@ -7,11 +7,18 @@ import type { Position, InstrumentInfo, Leg, OptionType } from '../utils/types';
 
 type Props = { id: string; onClose: () => void };
 
+const ensureLegCreatedAt = <T extends { createdAt?: number }>(leg: T, fallback: number): T => {
+  const raw = Number((leg as any)?.createdAt);
+  if (Number.isFinite(raw)) return { ...leg, createdAt: raw };
+  return { ...leg, createdAt: fallback };
+};
+
 export function EditPositionModal({ id, onClose }: Props) {
   const position = useStore((s) => s.positions.find(p => p.id === id));
   const updatePosition = useStore((s) => s.updatePosition);
   const removePosition = useStore((s) => s.removePosition);
-  const [draft, setDraft] = React.useState(() => position?.legs || []);
+  const baseCreatedAt = Number.isFinite(position?.createdAt) ? Number(position?.createdAt) : Date.now();
+  const [draft, setDraft] = React.useState(() => position?.legs?.map((L) => ensureLegCreatedAt(L, baseCreatedAt)) || []);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
   const [instruments, setInstruments] = React.useState<InstrumentInfo[]>([]);
   const [optType, setOptType] = React.useState<OptionType>('P');
@@ -28,7 +35,11 @@ export function EditPositionModal({ id, onClose }: Props) {
   const [perpUsdTotal, setPerpUsdTotal] = React.useState<number>(0);
   const [perpMode, setPerpMode] = React.useState<'contracts' | 'usd'>('contracts');
 
-  React.useEffect(() => { if (position) setDraft(position.legs); }, [position?.id]);
+  React.useEffect(() => {
+    if (!position) return;
+    const fallback = Number.isFinite(position.createdAt) ? Number(position.createdAt) : Date.now();
+    setDraft(position.legs.map((L) => ensureLegCreatedAt(L, fallback)));
+  }, [position?.id]);
 
   React.useEffect(() => {
     let m = true;
@@ -107,7 +118,8 @@ export function EditPositionModal({ id, onClose }: Props) {
     const leg: Leg = { symbol: inst.symbol, strike: inst.strike, optionType: inst.optionType, expiryMs: inst.deliveryTime };
     const q = Math.max(0.1, Math.round(Number(qty) * 10) / 10);
     const entryPrice = midPrice(tickers[leg.symbol]) ?? 0;
-    setDraft(d => [...d, { leg, side, qty: q, entryPrice }]);
+    const createdAt = Date.now();
+    setDraft(d => [...d, { leg, side, qty: q, entryPrice, createdAt }]);
     setSymbol('');
   };
 
@@ -121,14 +133,16 @@ export function EditPositionModal({ id, onClose }: Props) {
       if (!(usd > 0 && midEth != null && midEth > 0)) return;
       const qty = Number((usd / midEth).toFixed(4));
       if (!(qty > 0)) return;
-      setDraft(d => [...d, { leg, side: perpSide, qty, entryPrice: midEth }]);
+      const createdAt = Date.now();
+      setDraft(d => [...d, { leg, side: perpSide, qty, entryPrice: midEth, createdAt }]);
       setPerpUsdTotal(0);
     } else {
       const qtyRaw = Number(perpQty);
       const qty = Number.isFinite(qtyRaw) ? Math.max(0.0001, Math.round(qtyRaw * 1000) / 1000) : 0;
       if (!(qty > 0)) return;
       const entryPrice = midEth ?? 0;
-      setDraft(d => [...d, { leg, side: perpSide, qty, entryPrice }]);
+      const createdAt = Date.now();
+      setDraft(d => [...d, { leg, side: perpSide, qty, entryPrice, createdAt }]);
       setPerpQty(1);
     }
   };
@@ -243,7 +257,7 @@ export function EditPositionModal({ id, onClose }: Props) {
                   // open new leg
                   const inst = rollChain.find(c => c.symbol === rollSymbol);
                   if (!inst) return;
-                  const openLeg = { leg: { symbol: inst.symbol, strike: inst.strike, optionType: inst.optionType, expiryMs: inst.deliveryTime }, side: src.side, qty: src.qty, entryPrice: midPrice(tickers[inst.symbol]) ?? 0 };
+                  const openLeg = { leg: { symbol: inst.symbol, strike: inst.strike, optionType: inst.optionType, expiryMs: inst.deliveryTime }, side: src.side, qty: src.qty, entryPrice: midPrice(tickers[inst.symbol]) ?? 0, createdAt: Date.now() };
                   setDraft(d => [...d, { ...closeLeg, entryPrice: entryClose }, openLeg]);
                 }}>Add roll</button>
               </div>

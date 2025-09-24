@@ -41,16 +41,26 @@ export const useStore = create<State>()(
           ...st.spreads
         ]
       })),
-      addPosition: (p) => set((st) => ({
-        positions: [
-          {
-            id: crypto.randomUUID(),
-            createdAt: Date.now(),
-            ...p
-          },
-          ...st.positions
-        ]
-      })),
+      addPosition: (p) => set((st) => {
+        const posCreatedAt = Date.now();
+        let legOffset = 0;
+        const legs = (p.legs ?? []).map((leg) => {
+          const legCreatedAtRaw = Number((leg as any)?.createdAt);
+          const createdAt = Number.isFinite(legCreatedAtRaw) ? legCreatedAtRaw : (posCreatedAt + legOffset++);
+          return { ...leg, createdAt };
+        });
+        return {
+          positions: [
+            {
+              id: crypto.randomUUID(),
+              createdAt: posCreatedAt,
+              ...p,
+              legs,
+            },
+            ...st.positions
+          ]
+        };
+      }),
       markClosed: (id) => set((st) => ({
         spreads: st.spreads.map((p) => (p.id === id ? { ...p, closedAt: Date.now() } : p))
       })),
@@ -60,7 +70,21 @@ export const useStore = create<State>()(
       remove: (id) => set((st) => ({ spreads: st.spreads.filter((p) => p.id !== id) })),
       removePosition: (id) => set((st) => ({ positions: st.positions.filter((p) => p.id !== id) })),
       updateSpread: (id, updater) => set((st) => ({ spreads: st.spreads.map((p) => (p.id === id ? updater(p) : p)) })),
-      updatePosition: (id, updater) => set((st) => ({ positions: st.positions.map((p) => (p.id === id ? updater(p) : p)) })),
+      updatePosition: (id, updater) => set((st) => ({
+        positions: st.positions.map((p) => {
+          if (p.id !== id) return p;
+          const updated = updater(p);
+          if (!updated) return p;
+          const now = Date.now();
+          let legOffset = 0;
+          const legs = (updated.legs ?? []).map((leg) => {
+            const legCreatedAtRaw = Number((leg as any)?.createdAt);
+            const createdAt = Number.isFinite(legCreatedAtRaw) ? legCreatedAtRaw : (now + legOffset++);
+            return { ...leg, createdAt };
+          });
+          return { ...updated, legs };
+        })
+      })),
       setDeposit: (v) => set((st) => ({ settings: { ...st.settings, depositUsd: v } })),
       toggleFavoriteSpread: (id) => set((st) => ({ spreads: st.spreads.map((p) => (p.id === id ? { ...p, favorite: !p.favorite } : p)) })),
       toggleFavoritePosition: (id) => set((st) => ({ positions: st.positions.map((p) => (p.id === id ? { ...p, favorite: !p.favorite } : p)) })),
@@ -109,17 +133,24 @@ export const useStore = create<State>()(
             const createdAt = Number(p?.createdAt) || Date.now();
             const closedAt = p?.closedAt != null ? Number(p.closedAt) : undefined;
             const note = typeof p?.note === 'string' ? p.note : undefined;
-            const legs = Array.isArray(p?.legs) ? p.legs.map((l: any) => ({
-              leg: normalizeLegSymbol({
-                symbol: String(l?.leg?.symbol || ''),
-                strike: Number(l?.leg?.strike) || 0,
-                optionType: l?.leg?.optionType === 'P' ? 'P' : 'C',
-                expiryMs: Number(l?.leg?.expiryMs) || 0,
-              }),
-              side: l?.side === 'long' ? 'long' : 'short',
-              qty: Number(l?.qty) > 0 ? Number(l.qty) : 1,
-              entryPrice: Number(l?.entryPrice) || 0,
-            })).filter((l: any) => l.leg.symbol) : [];
+            let legCounter = 0;
+            const legs = Array.isArray(p?.legs) ? p.legs.map((l: any) => {
+              const legCreatedAtRaw = Number(l?.createdAt);
+              const legCreatedAt = Number.isFinite(legCreatedAtRaw) ? legCreatedAtRaw : (createdAt + legCounter++);
+              return {
+                leg: normalizeLegSymbol({
+                  symbol: String(l?.leg?.symbol || ''),
+                  strike: Number(l?.leg?.strike) || 0,
+                  optionType: l?.leg?.optionType === 'P' ? 'P' : 'C',
+                  expiryMs: Number(l?.leg?.expiryMs) || 0,
+                }),
+                side: l?.side === 'long' ? 'long' : 'short',
+                qty: Number(l?.qty) > 0 ? Number(l.qty) : 1,
+                entryPrice: Number(l?.entryPrice) || 0,
+                createdAt: legCreatedAt,
+                hidden: typeof l?.hidden === 'boolean' ? l.hidden : undefined,
+              };
+            }).filter((l: any) => l.leg.symbol) : [];
             return { id, createdAt, closedAt, note, legs, favorite: typeof p?.favorite === 'boolean' ? p.favorite : undefined } as Position;
           }).filter((p) => p.legs.length > 0);
 

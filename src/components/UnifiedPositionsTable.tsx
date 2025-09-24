@@ -11,6 +11,15 @@ import { EditPositionModal } from './EditPositionModal';
 import { IfModal, IfRule, IfCond, IfOperand, IfSide, IfComparator, IfChain, IfConditionTemplate, migrateRule } from './IfModal';
 import { useSlowMode } from '../contexts/SlowModeContext';
 
+function formatCreatedAtLabel(createdAt?: number): string | null {
+  if (!Number.isFinite(createdAt)) return null;
+  const dt = new Date(Number(createdAt));
+  if (Number.isNaN(dt.getTime())) return null;
+  const datePart = dt.toLocaleDateString('ru-RU');
+  const timePart = dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase();
+  return `(created ${datePart} | ${timePart})`;
+}
+
 type Row = {
   id: string;
   kind: 'vertical' | 'multi';
@@ -79,12 +88,13 @@ function fromSpread(s: SpreadPosition): Row {
   const entryLong = s.entryLong != null
     ? s.entryLong
     : (s.entryShort != null ? s.entryShort - s.cEnter : 0);
+  const legCreatedAt = Number.isFinite(s.createdAt) ? Number(s.createdAt) : Date.now();
   return {
     id: 'S:' + s.id,
     kind: 'vertical',
     legs: [
-      { leg: s.short, side: 'short', qty: s.qty ?? 1, entryPrice: entryShort },
-      { leg: s.long,  side: 'long',  qty: s.qty ?? 1, entryPrice: entryLong },
+      { leg: s.short, side: 'short', qty: s.qty ?? 1, entryPrice: entryShort, createdAt: legCreatedAt },
+      { leg: s.long,  side: 'long',  qty: s.qty ?? 1, entryPrice: entryLong, createdAt: legCreatedAt },
     ],
     createdAt: s.createdAt,
     closedAt: s.closedAt,
@@ -194,6 +204,22 @@ export function UnifiedPositionsTable() {
   });
   const [columnsMenuOpen, setColumnsMenuOpen] = React.useState(false);
   const columnsMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const handleDeleteLeg = React.useCallback((row: Row, legIndex: number): boolean => {
+    if (!row.id.startsWith('P:')) return false;
+    if (!window.confirm('Delete this leg from the position? This cannot be undone.')) return false;
+    const pid = row.id.slice(2);
+    updatePosition(pid, (p) => {
+      const legs = p.legs.filter((_, idx) => idx !== legIndex);
+      return { ...p, legs };
+    });
+    // If no legs remain, drop the entire position
+    const checkRemoval = () => {
+      const next = useStore.getState().positions.find((p) => p.id === pid);
+      if (!next || next.legs.length === 0) removePosition(pid);
+    };
+    setTimeout(checkRemoval, 0);
+    return true;
+  }, [updatePosition, removePosition]);
 
   const hvSeriesRaw = React.useMemo(() => {
     if (!hvStats?.series?.length) return [] as number[];
@@ -1358,10 +1384,23 @@ export function UnifiedPositionsTable() {
                       <td>
                         <div style={{display:'flex', flexDirection:'column', gap:4}}>
                           <div style={{display:'flex', alignItems:'center', gap:6}}>
-                            <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 6px', fontSize: 18}} title={r.favorite ? 'Unfavorite' : 'Favorite'} onClick={() => {
-                              if (r.id.startsWith('S:')) toggleFavoriteSpread(r.id.slice(2));
-                              else toggleFavoritePosition(r.id.slice(2));
-                            }}>{r.favorite ? '★' : '☆'}</button>
+                            <button
+                              className="ghost"
+                              style={{
+                                height: 28,
+                                lineHeight: '28px',
+                                padding: '0 6px',
+                                fontSize: 18,
+                                color: r.favorite ? '#d4b106' : 'var(--fg)',
+                                fontFamily: '"Segoe UI Symbol", "Arial Unicode MS", sans-serif',
+                                transition: 'color 0.15s ease',
+                              }}
+                              title={r.favorite ? 'Unfavorite' : 'Favorite'}
+                              onClick={() => {
+                                if (r.id.startsWith('S:')) toggleFavoriteSpread(r.id.slice(2));
+                                else toggleFavoritePosition(r.id.slice(2));
+                              }}
+                            >{r.favorite ? '★' : '☆'}</button>
                             <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 6px', fontSize: 28}} title={expanded[r.id] ? 'Hide legs' : 'Show legs'} onClick={() => setExpanded(prev => ({ ...prev, [r.id]: !prev[r.id] }))}>{expanded[r.id] ? '▴' : '▾'}</button>
                             <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => setView(r)}>View</button>
                             <button className="ghost" onClick={() => openEditRow(r)} style={{height: 28, lineHeight: '28px', padding: '0 10px'}}>Edit</button>
@@ -1437,9 +1476,27 @@ export function UnifiedPositionsTable() {
                                         } catch {}
                                       }
                                     }}>{L.hidden ? 'Unhide' : 'Hide'}</button>
-                                    <div><strong>{L.side}</strong> {L.leg.optionType} {L.leg.strike} × {L.qty}</div>
+                                    <div>
+                                      <strong>{L.side}</strong> {L.leg.optionType} {L.leg.strike} × {L.qty}
+                                      {(() => {
+                                        const label = formatCreatedAtLabel(L.createdAt ?? r.createdAt);
+                                        return label ? (
+                                          <span style={{ marginLeft: 6, color: '#9c9c9c', fontSize: 'calc(1em - 1px)' }}>{label}</span>
+                                        ) : null;
+                                      })()}
+                                    </div>
                                   </div>
-                                  <div className="muted">{Number(L.leg.expiryMs) > 0 ? new Date(Number(L.leg.expiryMs)).toISOString().slice(0,10) : ''}</div>
+                                  <div style={{display:'flex', alignItems:'center', gap:6}}>
+                                    <div className="muted">{Number(L.leg.expiryMs) > 0 ? new Date(Number(L.leg.expiryMs)).toISOString().slice(0,10) : ''}</div>
+                                    {r.id.startsWith('P:') && (
+                                      <button
+                                        type="button"
+                                        className="ghost"
+                                        style={{height: 22, lineHeight: '22px', padding: '0 8px', cursor:'pointer'}}
+                                        onClick={(e) => { e.stopPropagation(); handleDeleteLeg(r, i); }}
+                                      >Del</button>
+                                    )}
+                                  </div>
                                 </div>
                                 <div className="grid" style={{gridTemplateColumns:'2fr repeat(5, minmax(0,1fr))', gridTemplateRows:'repeat(4, auto)', gap: 6}}>
                                   {/* First column header (row 1) */}
@@ -1577,6 +1634,17 @@ export function UnifiedPositionsTable() {
             setView(null);
             openEditRow(current);
           }}
+          onDeleteLeg={view.id.startsWith('P:') ? (legIndex) => {
+            const removed = handleDeleteLeg(view, legIndex);
+            if (!removed) return;
+            const targetId = view.id;
+            setView((current) => {
+              if (!current || current.id !== targetId) return current;
+              const nextLegs = current.legs.filter((_, idx) => idx !== legIndex);
+              if (nextLegs.length === 0) return null;
+              return { ...current, legs: nextLegs };
+            });
+          } : undefined}
           onToggleLegHidden={(sym) => {
             if (view.id.startsWith('P:')) {
               const pid = view.id.slice(2);
@@ -1626,6 +1694,13 @@ export function UnifiedPositionsTable() {
                 <textarea
                   value={noteDraft}
                   onChange={(e) => setNoteDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                      e.preventDefault();
+                      saveNotes();
+                      closeNotes();
+                    }
+                  }}
                   placeholder="Add your comments"
                   style={{ width: '100%', height: '100%', minHeight: 160, resize: 'none', borderRadius: 8, border: '1px solid var(--border)', padding: 10, fontFamily: 'inherit', fontSize: '1em', background: 'var(--surface)', color: 'var(--fg)', overflow: 'auto', boxSizing: 'border-box' }}
                 />

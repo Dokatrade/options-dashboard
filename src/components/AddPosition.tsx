@@ -390,11 +390,14 @@ export function AddPosition() {
       setStrike('');
     } else {
       // Save generic multi-leg position with per-leg entry prices
+      const now = Date.now();
+      let legOffset = 0;
       const legs = draft.map(d => ({
         leg: d.leg,
         side: d.side,
         qty: d.qty,
-        entryPrice: midPrice(tickers[d.leg.symbol]) ?? 0
+        entryPrice: midPrice(tickers[d.leg.symbol]) ?? 0,
+        createdAt: now + legOffset++,
       }));
       addPosition({ legs });
       setDraft([]);

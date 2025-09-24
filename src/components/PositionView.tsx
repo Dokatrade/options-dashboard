@@ -6,6 +6,15 @@ import { bsPrice, bsImpliedVol } from '../utils/bs';
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
+function formatCreatedAtLabel(createdAt?: number): string | null {
+  if (!Number.isFinite(createdAt)) return null;
+  const dt = new Date(Number(createdAt));
+  if (Number.isNaN(dt.getTime())) return null;
+  const datePart = dt.toLocaleDateString('ru-RU');
+  const timePart = dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase();
+  return `(created ${datePart} ${timePart})`;
+}
+
 type Props = {
   legs: PositionLeg[];
   createdAt: number;
@@ -15,9 +24,10 @@ type Props = {
   onToggleLegHidden?: (symbol: string) => void;
   hiddenSymbols?: string[];
   onEdit?: () => void;
+  onDeleteLeg?: (legIndex: number) => void;
 };
 
-export function PositionView({ legs, createdAt, note, title, onClose, onToggleLegHidden, hiddenSymbols, onEdit }: Props) {
+export function PositionView({ legs, createdAt, note, title, onClose, onToggleLegHidden, hiddenSymbols, onEdit, onDeleteLeg }: Props) {
   const legsCalc = React.useMemo(() => {
     const hiddenSet = new Set(hiddenSymbols || []);
     return legs.filter(L => !hiddenSet.has(L.leg.symbol));
@@ -217,6 +227,13 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
 
 
   const calc = React.useMemo(() => {
+    const spotCandidates: number[] = [];
+    const perpEntryCandidates: number[] = [];
+    const strikeCandidates: number[] = [];
+    const addCandidate = (value: unknown) => {
+      const num = Number(value);
+      if (Number.isFinite(num) && num > 0) spotCandidates.push(num);
+    };
     const det = legsCalc.map((L) => {
       const t = tickers[L.leg.symbol] || {};
       const { bid, ask } = bestBidAsk(t);
@@ -238,6 +255,20 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
       const sgn = L.side === 'long' ? 1 : -1;
       const pnlMid = (isShort ? (entryPrice - mid) : (mid - entryPrice)) * qty;
       const pnlExec = (isShort ? (entryPrice - execPrice) : (execPrice - entryPrice)) * qty;
+      const symbol = String(L.leg.symbol || '');
+      const expiryMs = Number(L.leg.expiryMs) || 0;
+      const isPerp = !symbol.includes('-') || expiryMs <= 0;
+      const strike = Number(L.leg.strike);
+      if (Number.isFinite(strike) && strike > 0) strikeCandidates.push(strike);
+      if (t?.indexPrice != null) addCandidate(t.indexPrice);
+      if (isPerp) {
+        addCandidate(t?.markPrice);
+        addCandidate(t?.lastPrice);
+        addCandidate(mid);
+        addCandidate(bidNum);
+        addCandidate(askNum);
+        if (Number.isFinite(entryPrice) && entryPrice > 0) perpEntryCandidates.push(entryPrice);
+      }
       return {
         L,
         bid: bidNum,
@@ -267,13 +298,32 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
     const dteLabel = dtes.length ? (dtes.length === 1 ? `${dtes[0]}d` : `${Math.min(...dtes)}–${Math.max(...dtes)}d`) : '—';
     // Spot proxy from any leg's indexPrice
     const spot = (() => {
-      for (const L of legsCalc) {
-        const t = tickers[L.leg.symbol];
-        if (t?.indexPrice != null) return Number(t.indexPrice);
+      for (const candidate of spotCandidates) {
+        if (Number.isFinite(candidate) && candidate > 0) return candidate;
+      }
+      if (perpEntryCandidates.length) {
+        const sum = perpEntryCandidates.reduce((acc, v) => acc + v, 0);
+        return sum / perpEntryCandidates.length;
+      }
+      if (strikeCandidates.length) {
+        const sum = strikeCandidates.reduce((acc, v) => acc + v, 0);
+        return sum / strikeCandidates.length;
       }
       return undefined;
     })();
-    return { det, netEntry, netMid, netExec, pnl, pnlExec, greeks, dteLabel, spot };
+    const priceHint = (() => {
+      if (spot != null && Number.isFinite(spot) && spot > 0) return spot;
+      if (perpEntryCandidates.length) {
+        const sum = perpEntryCandidates.reduce((acc, v) => acc + v, 0);
+        return sum / perpEntryCandidates.length;
+      }
+      if (strikeCandidates.length) {
+        const sum = strikeCandidates.reduce((acc, v) => acc + v, 0);
+        return sum / strikeCandidates.length;
+      }
+      return undefined;
+    })();
+    return { det, netEntry, netMid, netExec, pnl, pnlExec, greeks, dteLabel, spot, priceHint };
   }, [legs, tickers]);
 
   const netPnlValue = useExecPnl ? calc.pnlExec : calc.pnl;
@@ -300,8 +350,15 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
 
   // Expiry PnL extrema (max profit/loss). Uses expiry payoff across S in {0, strikes, large S} with unbounded detection on S→∞.
   const extrema = React.useMemo(() => {
-    const strikes = legsCalc.map(l => Number(l.leg.strike) || 0).filter(s => isFinite(s));
-    const Ks = Array.from(new Set(strikes)).sort((a,b)=>a-b);
+    const priceAnchor = calc.priceHint;
+    const strikeValues = legsCalc
+      .map((l) => Number(l.leg.strike))
+      .filter((s) => Number.isFinite(s) && s > 0) as number[];
+    if (!strikeValues.length && priceAnchor != null && Number.isFinite(priceAnchor) && priceAnchor > 0) {
+      strikeValues.push(priceAnchor);
+    }
+    if (!strikeValues.length) strikeValues.push(100);
+    const Ks = Array.from(new Set(strikeValues)).sort((a,b)=>a-b);
     const netEntry = calc.netEntry;
     const pnlAt = (S: number) => {
       let signedVal = 0;
@@ -314,8 +371,16 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
       return netEntry - signedVal;
     };
     const S0 = 0;
-    const Sbig = (Ks.length ? Ks[Ks.length - 1] : 1000) * 5 + 1;
+    const largestRef = Math.max(
+      Ks.length ? Ks[Ks.length - 1] : 0,
+      priceAnchor != null && Number.isFinite(priceAnchor) ? Number(priceAnchor) : 0,
+    );
+    const baseSpan = largestRef > 0 ? largestRef : 1000;
+    const Sbig = baseSpan * 3 + 1;
     const candidates = [S0, ...Ks, Sbig];
+    if (priceAnchor != null && Number.isFinite(priceAnchor) && priceAnchor > 0) {
+      candidates.push(Number(priceAnchor));
+    }
     let minV = Infinity, maxV = -Infinity;
     for (const S of candidates) {
       const v = pnlAt(S);
@@ -343,22 +408,30 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
       unboundedProfit,
       unboundedLoss,
     };
-  }, [legsCalc, calc.netEntry]);
+  }, [legsCalc, calc.netEntry, calc.priceHint]);
 
   // Expiry payoff chart (PnL vs S)
   const payoff = React.useMemo(() => {
-    const strikes = legsCalc.map(l => l.leg.strike);
-    const Kmin = Math.min(...strikes);
-    const Kmax = Math.max(...strikes);
+    const priceHint = calc.priceHint;
+    const strikeValues = legsCalc
+      .map((l) => Number(l.leg.strike))
+      .filter((s) => Number.isFinite(s) && s > 0) as number[];
+    if (!strikeValues.length && priceHint != null && Number.isFinite(priceHint) && priceHint > 0) {
+      strikeValues.push(priceHint);
+    }
+    if (!strikeValues.length) strikeValues.push(100);
+    const Kmin = Math.min(...strikeValues);
+    const Kmax = Math.max(...strikeValues);
     if (!baseDomainRef.current) {
-      const spotVal = calc.spot != null && isFinite(calc.spot) ? Number(calc.spot) : undefined;
-      if (spotVal != null && spotVal > 0) {
-        const mMin = Math.max(0.01, spotVal * 0.5);
-        const mMax = spotVal * 1.5;
-        baseDomainRef.current = { minX: mMin, maxX: mMax };
+      const spotVal = priceHint != null && Number.isFinite(priceHint) && priceHint > 0 ? Number(priceHint) : undefined;
+      if (spotVal != null) {
+        const span = Math.max(spotVal * 0.5, 25);
+        const minGuess = Math.max(0.01, spotVal - span);
+        const maxGuess = Math.max(minGuess + 1, spotVal + span);
+        baseDomainRef.current = { minX: minGuess, maxX: maxGuess };
       } else {
         // Fallback: center by strikes
-        const uniqK = Array.from(new Set(strikes.map(Number)));
+        const uniqK = Array.from(new Set(strikeValues.map(Number)));
         if (uniqK.length === 1) {
           const K = uniqK[0];
           const range = Math.max(50, Math.abs(K) * 0.35);
@@ -380,10 +453,15 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
     const valueAt = (S: number) => {
       let signedVal = 0;
       for (const L of legsCalc) {
-        const K = L.leg.strike;
+        const K = Number(L.leg.strike) || 0;
         const qty = Number(L.qty) || 1;
         const sign = L.side === 'short' ? 1 : -1;
-        const intrinsic = L.leg.optionType === 'C' ? Math.max(0, S - K) : Math.max(0, K - S);
+        const symbol = String(L.leg.symbol || '');
+        const expiryMs = Number(L.leg.expiryMs) || 0;
+        const isPerp = !symbol.includes('-') || expiryMs <= 0;
+        const intrinsic = isPerp
+          ? S
+          : (L.leg.optionType === 'C' ? Math.max(0, S - K) : Math.max(0, K - S));
         signedVal += sign * intrinsic * qty;
       }
       return netEntry - signedVal;
@@ -494,7 +572,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
       return out;
     })();
     // Bands between strikes (alternate light shading)
-    const Ks = Array.from(new Set(strikes.map(Number))).sort((a, b) => a - b);
+    const Ks = Array.from(new Set(strikeValues.map(Number))).sort((a, b) => a - b);
     const bands: Array<{ x1: number; x2: number; fill: string }> = [];
     for (let i = 0; i < Ks.length - 1; i++) {
       const a = Math.max(minX, Ks[i]);
@@ -535,7 +613,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
       return out;
     })();
     return { W, H, x0, x1, y0, y1, minX, maxX, xScale, yScale, path, nowPath, xTicks, yTicks, yZero: yScale(0), beCoords, beNowCoords, bands };
-  }, [legs, calc.netEntry, calc.netMid, calc.netExec, effTimePos, minTimePos, xZoom, yZoom, useExecPnl, optionPriceAt]);
+  }, [legs, calc.netEntry, calc.netMid, calc.netExec, calc.priceHint, effTimePos, minTimePos, xZoom, yZoom, useExecPnl, optionPriceAt]);
 
   // Screenshot functionality removed per request
 
@@ -716,14 +794,30 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
               );
             })()}
             {/* Strike markers */}
-            {Array.from(new Set(legsCalc.map(l => Number(l.leg.strike) || 0))).map((K, i) => (
-              <line key={i} x1={payoff.xScale(K)} y1={payoff.y0} x2={payoff.xScale(K)} y2={payoff.y1} stroke="#9aa0a6" strokeDasharray="3 3" />
-            ))}
+            {(() => {
+              const strikeMarkers = Array.from(new Set(
+                legsCalc
+                  .filter((l) => {
+                    const symbol = String(l.leg.symbol || '');
+                    const exp = Number(l.leg.expiryMs) || 0;
+                    return symbol.includes('-') && exp > 0;
+                  })
+                  .map((l) => Number(l.leg.strike) || 0)
+                  .filter((s) => Number.isFinite(s) && s > 0),
+              ));
+              return strikeMarkers.map((K, i) => (
+                <line key={i} x1={payoff.xScale(K)} y1={payoff.y0} x2={payoff.xScale(K)} y2={payoff.y1} stroke="#9aa0a6" strokeDasharray="3 3" />
+              ));
+            })()}
             {/* Per-leg markers at top to reflect option legs */}
             {(() => {
               const byK: Record<string, { K: number; items: { side: 'long'|'short'; type: 'C'|'P'; qty: number }[] }> = {};
               legs.forEach(L => {
+                const symbol = String(L.leg.symbol || '');
+                const exp = Number(L.leg.expiryMs) || 0;
+                if (!symbol.includes('-') || exp <= 0) return;
                 const K = Number(L.leg.strike) || 0;
+                if (!(Number.isFinite(K) && K > 0)) return;
                 const key = String(K);
                 if (!byK[key]) byK[key] = { K, items: [] };
                 byK[key].items.push({ side: L.side, type: L.leg.optionType, qty: Number(L.qty) || 1 });
@@ -857,16 +951,23 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
               const value = ratio != null && isFinite(ratio) ? ratio.toFixed(2) : '—';
               let style: React.CSSProperties | undefined;
               if (ratio != null && isFinite(ratio)) {
-                if (ratio <= 1.5) style = { color: '#1b8a4d', fontWeight: 600 };
-                else if (ratio <= 1.7) style = { color: '#c98f09', fontWeight: 600 };
-                else if (ratio <= 2) style = { color: '#d77c1f', fontWeight: 600 };
-                else style = { color: '#c0392b', fontWeight: 600 };
-              } else {
-                style = { fontWeight: 600 };
+                if (ratio <= 1.5) style = { color: 'var(--gain)' };
+                else if (ratio <= 1.7) style = { color: '#fbbf24' };
+                else if (ratio <= 2) style = { color: '#f97316' };
+                else style = { color: 'var(--loss)' };
               }
               return <span style={style}>{value}</span>;
             })()}</div></div>
-            <div><div className="muted">PnL ($){useExecPnl && <span style={{marginLeft:4, fontSize:'0.75em'}}>exec</span>}</div><div>{netPnlValue.toFixed(2)}</div></div>
+            <div>
+              <div className="muted">PnL ($){useExecPnl && <span style={{marginLeft:4, fontSize:'0.75em'}}>exec</span>}</div>
+              <div>
+                {(() => {
+                  if (!Number.isFinite(netPnlValue)) return '—';
+                  const color = netPnlValue > 0 ? 'var(--gain)' : (netPnlValue < 0 ? 'var(--loss)' : undefined);
+                  return <span style={color ? { color } : undefined}>{netPnlValue.toFixed(2)}</span>;
+                })()}
+              </div>
+            </div>
             {/* Greeks after net figures */}
             <div><div className="muted">Δ (Delta)</div><div>{calc.greeks.delta.toFixed(3)}</div></div>
             <div><div className="muted">Vega</div><div>{calc.greeks.vega.toFixed(3)}</div></div>
@@ -874,7 +975,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
           </div>
 
           <div className="grid" style={{gap: 6}}>
-                {legs.map((L) => {
+                {legs.map((L, legIndex) => {
               const t = tickers[L.leg.symbol] || {};
               const { bid, ask } = bestBidAsk(t);
               const bidNum = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
@@ -917,7 +1018,21 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                     )}
                     <div style={{fontSize:'calc(1em + 2px)'}}><strong>{L.side}</strong> {L.leg.optionType} {L.leg.strike} × {L.qty}</div>
                   </div>
-                  <div className="muted" style={{fontSize:'calc(1em + 2px)'}}>{Number(L.leg.expiryMs) > 0 ? new Date(Number(L.leg.expiryMs)).toISOString().slice(0,10) : ''}</div>
+                  <div style={{display:'flex', alignItems:'center', gap:8}}>
+                    <div className="muted" style={{fontSize:'calc(1em + 2px)'}}>{Number(L.leg.expiryMs) > 0 ? new Date(Number(L.leg.expiryMs)).toISOString().slice(0,10) : ''}</div>
+                    {onDeleteLeg && (
+                      <button
+                        type="button"
+                        className="ghost"
+                        style={{height: 22, lineHeight: '22px', padding: '0 8px', cursor:'pointer'}}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onDeleteLeg(legIndex);
+                        }}
+                      >Del</button>
+                    )}
+                  </div>
                 </div>
                 {/* Grid 6x4; first column: row 1 label, rows 2-4 merged value centered */}
                 <div className="grid" style={{gridTemplateColumns:'2fr repeat(5, minmax(0,1fr))', gridTemplateRows:'repeat(4, auto)', gap: 6}}>
@@ -925,7 +1040,15 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                   <div style={{gridColumn:1, gridRow:1}} className="muted">Symbol</div>
                   {/* First column value spans rows 2-4 and is vertically centered */}
                   <div style={{gridColumn:1, gridRow:'2 / span 3', paddingRight:12, display:'flex', alignItems:'center'}}>
-                    <div title={L.leg.symbol} style={{whiteSpace:'normal', overflowWrap:'anywhere', wordBreak:'break-word', fontSize:'1em'}}>{L.leg.symbol}</div>
+                    <div title={L.leg.symbol} style={{display:'flex', alignItems:'center', flexWrap:'wrap', gap:6}}>
+                      <span style={{whiteSpace:'normal', overflowWrap:'anywhere', wordBreak:'break-word', fontSize:'1em'}}>{L.leg.symbol}</span>
+                      {(() => {
+                        const label = formatCreatedAtLabel(L.createdAt ?? createdAt);
+                        return label ? (
+                          <span style={{ color: '#9c9c9c', fontSize: 'calc(1em - 2px)' }}>{label}</span>
+                        ) : null;
+                      })()}
+                    </div>
                   </div>
                   {/* Row 1: titles (left to right) */}
                   <div style={{gridColumn:2, gridRow:1}} className="muted">Bid / Ask</div>
@@ -945,7 +1068,9 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                   <div style={{gridColumn:4, gridRow:2}}>{isFinite(L.entryPrice) ? `$${L.entryPrice.toFixed(2)}` : '—'}</div>
                   <div style={{gridColumn:5, gridRow:2}}>{(() => {
                     const value = useExecPnl ? x.pnlExec : x.pnlMid;
-                    return value != null && isFinite(value) ? value.toFixed(2) : '—';
+                    if (!(value != null && isFinite(value))) return '—';
+                    const color = value > 0 ? 'var(--gain)' : (value < 0 ? 'var(--loss)' : undefined);
+                    return <span style={color ? { color } : undefined}>{value.toFixed(2)}</span>;
                   })()}</div>
                   <div style={{gridColumn:6, gridRow:2}}>{(() => {
                     const t = tickers[L.leg.symbol] || {};

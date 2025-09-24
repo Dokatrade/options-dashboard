@@ -224,9 +224,10 @@ export function SpreadTable() {
         const entryLong = pos.entryLong != null
           ? pos.entryLong
           : (pos.entryShort != null ? pos.entryShort - pos.cEnter : 0);
+        const legCreatedAt = Number.isFinite(pos.createdAt) ? Number(pos.createdAt) : Date.now();
         const legs = [
-          { leg: pos.short, side: 'short' as const, qty, entryPrice: entryShort },
-          { leg: pos.long,  side: 'long'  as const, qty, entryPrice: entryLong },
+          { leg: pos.short, side: 'short' as const, qty, entryPrice: entryShort, createdAt: legCreatedAt },
+          { leg: pos.long,  side: 'long'  as const, qty, entryPrice: entryLong, createdAt: legCreatedAt },
         ];
         const title = `Vertical ${pos.short.optionType} ${pos.short.strike}/${pos.long.strike}`;
         return (
