@@ -1,7 +1,6 @@
 import React from 'react';
 import { MarketContextCard } from './components/MarketContextCard';
 import { PortfolioSummary } from './components/PortfolioSummary';
-import { AddPosition } from './components/AddPosition';
 import { UnifiedPositionsTable } from './components/UnifiedPositionsTable';
 import { HelpModal } from './components/HelpModal';
 import { SlowModeProvider } from './contexts/SlowModeContext';
@@ -23,11 +22,6 @@ export default function App() {
           </div>
           <div className="card" style={{flex: 1}}>
             <PortfolioSummary />
-          </div>
-        </div>
-        <div className="row">
-          <div className="card" style={{flex: 1}}>
-            <AddPosition />
           </div>
         </div>
         <div className="row">

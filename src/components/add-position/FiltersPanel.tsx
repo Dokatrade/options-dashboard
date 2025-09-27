@@ -53,6 +53,13 @@ export function FiltersPanel({
 }: FiltersPanelProps) {
   return (
     <div className="add-position__filters">
+      <div className="add-position__filters-row add-position__filters-row--top">
+        <div className="add-position__status">
+          <span className="muted">Spot ETH</span>
+          <span className="add-position__spot">{formatSpot(spotPrice)}</span>
+          {slowMode && <span className="add-position__badge">Slow mode</span>}
+        </div>
+      </div>
       <div className="add-position__filters-row">
         <div className="add-position__field">
           <div className="muted add-position__label">Type</div>
@@ -87,15 +94,12 @@ export function FiltersPanel({
             ))}
           </select>
         </label>
+      </div>
+      <div className="add-position__filters-row">
         <label className="add-position__toggle">
           <input type="checkbox" checked={showAllStrikes} onChange={(e) => onToggleShowAll(e.target.checked)} />
           <span className="muted">Show all strikes</span>
         </label>
-        <div className="add-position__status">
-          <span className="muted">Spot ETH</span>
-          <span className="add-position__spot">{formatSpot(spotPrice)}</span>
-          {slowMode && <span className="add-position__badge">Slow mode</span>}
-        </div>
       </div>
       <div className="add-position__filters-row">
         <div className="add-position__field">
@@ -120,14 +124,16 @@ export function FiltersPanel({
             />
           </div>
         </div>
-        <label className="add-position__field">
-          <div className="muted add-position__label">Min OI</div>
-          <input type="number" min={0} step={1} value={minOI} onChange={(e) => onMinOiChange(Number(e.target.value) || 0)} />
-        </label>
-        <label className="add-position__field">
-          <div className="muted add-position__label">Max spread ($)</div>
-          <input type="number" min={0} step={0.01} value={Math.max(0, maxSpread)} onChange={(e) => onMaxSpreadChange(Number(e.target.value) || 0)} />
-        </label>
+        <div className="add-position__field-pair">
+          <label className="add-position__field add-position__field--compact">
+            <div className="muted add-position__label">Min OI</div>
+            <input type="number" min={0} step={1} value={minOI} onChange={(e) => onMinOiChange(Number(e.target.value) || 0)} />
+          </label>
+          <label className="add-position__field add-position__field--compact">
+            <div className="muted add-position__label">Max spread ($)</div>
+            <input type="number" min={0} step={0.01} value={Math.max(0, maxSpread)} onChange={(e) => onMaxSpreadChange(Number(e.target.value) || 0)} />
+          </label>
+        </div>
       </div>
     </div>
   );

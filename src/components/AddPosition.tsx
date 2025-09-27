@@ -28,6 +28,9 @@ export function AddPosition() {
   const [minOI, setMinOI] = React.useState<number>(0);
   const [maxSpread, setMaxSpread] = React.useState<number>(9999);
   const [showAllStrikes, setShowAllStrikes] = React.useState<boolean>(false);
+  const [perpQty, setPerpQty] = React.useState<number>(1);
+  const [perpNotional, setPerpNotional] = React.useState<number>(0);
+  const [perpQtySource, setPerpQtySource] = React.useState<'contracts' | 'usd'>('contracts');
   const { slowMode, register } = useSlowMode();
   const mountedRef = React.useRef(true);
   const chainRef = React.useRef<InstrumentInfo[]>([]);
@@ -411,6 +414,39 @@ export function AddPosition() {
     setShowAllStrikes(value);
   }, []);
 
+  const handlePerpContractsChange = React.useCallback((value: number) => {
+    const numeric = Number.isFinite(value) ? value : perpQty;
+    const sanitized = Math.max(0.001, Math.round(numeric * 1000) / 1000);
+    setPerpQty(sanitized);
+    setPerpQtySource('contracts');
+    if (spotPrice && spotPrice > 0) {
+      const notional = Math.round(sanitized * spotPrice * 100) / 100;
+      setPerpNotional(notional);
+    }
+  }, [perpQty, spotPrice]);
+
+  const handlePerpNotionalChange = React.useCallback((value: number) => {
+    const numeric = Number.isFinite(value) ? value : perpNotional;
+    const sanitized = Math.max(1, Math.round(numeric * 100) / 100);
+    setPerpNotional(sanitized);
+    setPerpQtySource('usd');
+    if (spotPrice && spotPrice > 0) {
+      const contracts = Math.max(0.001, Math.round((sanitized / spotPrice) * 1000) / 1000);
+      setPerpQty(contracts);
+    }
+  }, [perpNotional, spotPrice]);
+
+  React.useEffect(() => {
+    if (!spotPrice || spotPrice <= 0) return;
+    if (perpQtySource === 'contracts') {
+      const nextNotional = Math.round(perpQty * spotPrice * 100) / 100;
+      setPerpNotional((prev) => (Math.abs(prev - nextNotional) > 0.01 ? nextNotional : prev));
+    } else if (perpQtySource === 'usd') {
+      const nextContracts = Math.max(0.001, Math.round((perpNotional / spotPrice) * 1000) / 1000);
+      setPerpQty((prev) => (Math.abs(prev - nextContracts) > 0.0005 ? nextContracts : prev));
+    }
+  }, [spotPrice, perpQty, perpNotional, perpQtySource]);
+
   const updateDraftQty = React.useCallback((index: number, nextQty: number) => {
     setDraft((prev) => prev.map((item, i) => {
       if (i !== index) return item;
@@ -436,7 +472,7 @@ export function AddPosition() {
   };
 
   const addPerpLeg = (side: 'short' | 'long') => {
-    const q = Math.max(0.1, Math.round(Number(qty) * 10) / 10);
+    const q = Math.max(0.001, Math.round(Number(perpQty) * 1000) / 1000);
     // Represent Perp as spot symbol with empty option fields
     const leg: Leg = { symbol: 'ETHUSDT', strike: 0, optionType: 'C', expiryMs: 0 } as any;
     setDraft((d) => [...d, { leg, side, qty: q }]);
@@ -538,6 +574,11 @@ export function AddPosition() {
             onQtyChange={handleQtyChange}
             onAddLeg={addLeg}
             onAddPerp={addPerpLeg}
+            spotPrice={spotPrice}
+            perpQty={perpQty}
+            perpNotional={perpNotional}
+            onPerpContractsChange={handlePerpContractsChange}
+            onPerpNotionalChange={handlePerpNotionalChange}
             onClearSelection={() => setSelectedSymbol('')}
           />
         </div>
@@ -549,18 +590,18 @@ export function AddPosition() {
             onSelect={handleSelectSymbol}
             emptyMessage={emptyChainMessage}
           />
+          <DraftTable
+            draft={draft}
+            tickers={tickers}
+            canSaveAsVertical={canSaveAsVertical}
+            totalCreditPer={totalCreditPer}
+            onRemoveLeg={removeLeg}
+            onUpdateQty={updateDraftQty}
+            onClearDraft={clearDraft}
+            onSave={onSave}
+          />
         </div>
       </div>
-      <DraftTable
-        draft={draft}
-        tickers={tickers}
-        canSaveAsVertical={canSaveAsVertical}
-        totalCreditPer={totalCreditPer}
-        onRemoveLeg={removeLeg}
-        onUpdateQty={updateDraftQty}
-        onClearDraft={clearDraft}
-        onSave={onSave}
-      />
     </div>
   );
 }

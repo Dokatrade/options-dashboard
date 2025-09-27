@@ -7,6 +7,11 @@ type SelectionPanelProps = {
   onQtyChange: (value: number) => void;
   onAddLeg: (side: 'short' | 'long') => void;
   onAddPerp: (side: 'short' | 'long') => void;
+  spotPrice?: number;
+  perpQty: number;
+  perpNotional: number;
+  onPerpContractsChange: (value: number) => void;
+  onPerpNotionalChange: (value: number) => void;
   onClearSelection: () => void;
 };
 
@@ -15,8 +20,24 @@ const formatPrice = (value?: number) => {
   return `$${value.toFixed(2)}`;
 };
 
-export function SelectionPanel({ selectedRow, qty, onQtyChange, onAddLeg, onAddPerp, onClearSelection }: SelectionPanelProps) {
+export function SelectionPanel({
+  selectedRow,
+  qty,
+  onQtyChange,
+  onAddLeg,
+  onAddPerp,
+  spotPrice,
+  perpQty,
+  perpNotional,
+  onPerpContractsChange,
+  onPerpNotionalChange,
+  onClearSelection,
+}: SelectionPanelProps) {
   const disabled = !selectedRow;
+  const formattedSpot = React.useMemo(() => {
+    if (spotPrice == null || Number.isNaN(spotPrice)) return null;
+    return `$${spotPrice.toFixed(2)}`;
+  }, [spotPrice]);
 
   return (
     <div className="selection-panel">
@@ -79,9 +100,44 @@ export function SelectionPanel({ selectedRow, qty, onQtyChange, onAddLeg, onAddP
         <div className="selection-panel__buttons">
           <button type="button" className="ghost short" disabled={disabled} onClick={() => onAddLeg('short')}>Add Short</button>
           <button type="button" className="ghost long" disabled={disabled} onClick={() => onAddLeg('long')}>Add Long</button>
-          <span className="muted">or</span>
-          <button type="button" className="ghost short" onClick={() => onAddPerp('short')}>Add Perp Short (ETHUSDT)</button>
-          <button type="button" className="ghost long" onClick={() => onAddPerp('long')}>Add Perp Long (ETHUSDT)</button>
+        </div>
+      </div>
+      <div className="selection-panel__perp">
+        <div className="selection-panel__perp-head">
+          <div>
+            <div className="muted">Perpetual</div>
+            <div>ETHUSDT</div>
+          </div>
+          <div className="selection-panel__perp-spot muted">
+            {formattedSpot ? `Spot ${formattedSpot}` : 'Spot price unavailable'}
+          </div>
+        </div>
+        <div className="selection-panel__perp-inputs">
+          <label>
+            <div className="muted">Contracts</div>
+            <input
+              type="number"
+              min={0.001}
+              step={0.001}
+              value={perpQty}
+              onChange={(e) => onPerpContractsChange(Number(e.target.value))}
+            />
+          </label>
+          <label>
+            <div className="muted">Notional ($)</div>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={perpNotional}
+              onChange={(e) => onPerpNotionalChange(Number(e.target.value))}
+              disabled={!spotPrice}
+            />
+          </label>
+        </div>
+        <div className="selection-panel__buttons">
+          <button type="button" className="ghost short" onClick={() => onAddPerp('short')}>Add Short</button>
+          <button type="button" className="ghost long" onClick={() => onAddPerp('long')}>Add Long</button>
         </div>
       </div>
     </div>

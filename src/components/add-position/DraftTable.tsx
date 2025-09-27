@@ -92,14 +92,7 @@ export function DraftTable({
         <div className={`draft-panel__net ${badgeClass}`}>
           Net {totalCreditPer >= 0 ? 'credit' : 'debit'} (mid, total): {draft.length ? formatPrice(Math.abs(totalCreditPer)) : '—'}
         </div>
-        <div className="draft-panel__actions">
-          {!canSaveAsVertical && draft.length > 0 && (
-            <div className="muted">
-              Save to main table supports 2 legs with same expiry, equal qty, opposite sides.
-            </div>
-          )}
-          <button type="button" className="primary" disabled={!draft.length} onClick={onSave}>Save</button>
-        </div>
+        <button type="button" className="primary" disabled={!draft.length} onClick={onSave}>Save</button>
       </div>
     </div>
   );

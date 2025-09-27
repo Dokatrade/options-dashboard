@@ -9,6 +9,7 @@ import { downloadCSV, toCSV } from '../utils/csv';
 import { PositionView } from './PositionView';
 import { EditPositionModal } from './EditPositionModal';
 import { IfModal, IfRule, IfCond, IfOperand, IfSide, IfComparator, IfChain, IfConditionTemplate, migrateRule } from './IfModal';
+import { AddPositionModal } from './AddPositionModal';
 import { useSlowMode } from '../contexts/SlowModeContext';
 
 function formatCreatedAtLabel(createdAt?: number): string | null {
@@ -248,6 +249,7 @@ export function UnifiedPositionsTable() {
     return defaults;
   });
   const [columnsMenuOpen, setColumnsMenuOpen] = React.useState(false);
+  const [showAddPosition, setShowAddPosition] = React.useState(false);
   const columnsMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [settleTarget, setSettleTarget] = React.useState<Row | null>(null);
   const [actionMenuOpen, setActionMenuOpen] = React.useState(false);
@@ -1421,10 +1423,14 @@ export function UnifiedPositionsTable() {
 
   return (
     <div>
-      <h3>My Positions</h3>
+      <div style={{display:'flex', alignItems:'center', gap:12, marginBottom: 12}}>
+        <h3 style={{margin: 0}}>My Positions</h3>
+        <button className="primary" onClick={() => setShowAddPosition(true)}>Add Position</button>
+        <div style={{marginLeft:'auto'}}></div>
+      </div>
       <div style={{display:'flex', gap: 8, alignItems:'center', marginBottom: 6, flexWrap:'wrap'}}>
         <button className="ghost" onClick={exportCSV}>Export CSV</button>
-        <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+        <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', flex: '1 1 auto'}}>
           <label style={{display:'flex', gap:4, alignItems:'center', fontSize:'0.85em'}}>
             <input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />
             <span className="muted">Show closed</span>
@@ -1441,71 +1447,73 @@ export function UnifiedPositionsTable() {
             <input type="checkbox" checked={slowMode} onChange={(e) => setGlobalSlowMode(e.target.checked)} />
             <span className="muted">Slow refresh (5 min)</span>
           </label>
+          {slowMode && (
+            <div style={{display:'flex', alignItems:'center', gap:8, marginLeft:24, flexWrap:'wrap'}}>
+              <span className="muted">Last update: {slowStats.lastUpdated ? new Date(slowStats.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+              <span className="muted">Next: {slowStats.nextUpdate ? new Date(slowStats.nextUpdate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+              <button className="ghost" onClick={() => { void manualRefresh(); }} disabled={slowStats.refreshing}>
+                {slowStats.refreshing ? 'Refreshing…' : 'Refresh now'}
+              </button>
+              {slowStats.error && <span style={{color:'#c7762b'}}>{slowStats.error}</span>}
+            </div>
+          )}
         </div>
-        <div style={{display:'flex', gap:6, marginLeft: 'auto'}}>
-          <button className={tab==='all' ? 'primary' : 'ghost'} onClick={() => setTab('all')}>All</button>
-          <button className={tab==='fav' ? 'primary' : 'ghost'} onClick={() => setTab('fav')}>Favorites</button>
-        </div>
-        <div style={{display:'flex', gap:6, alignItems:'center'}}>
-          <span className="muted">Sort:</span>
-          <button className={sortKey==='date' ? 'primary' : 'ghost'} onClick={() => setSortKey('date')}>Date</button>
-          <button className={sortKey==='pnl' ? 'primary' : 'ghost'} onClick={() => setSortKey('pnl')}>PnL</button>
-          <button className={sortKey==='theta' ? 'primary' : 'ghost'} onClick={() => setSortKey('theta')}>Theta</button>
-          <button className={sortKey==='expiry' ? 'primary' : 'ghost'} onClick={() => { setSortKey('expiry'); setSortDir('asc'); }}>Expiry</button>
-          <button className="ghost" title={sortDir==='desc' ? 'Descending' : 'Ascending'} onClick={() => setSortDir(d => d==='desc'?'asc':'desc')}>{sortDir==='desc' ? '↓' : '↑'}</button>
-          <div ref={columnsMenuRef} style={{ position: 'relative', marginLeft: 12 }}>
-            <button
-              className="ghost"
-              onClick={() => setColumnsMenuOpen((open) => !open)}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 10 }}
-            >
-              Columns
-              <span style={{ fontSize: '0.9em' }}>{columnsMenuOpen ? '▴' : '▾'}</span>
-            </button>
-            {columnsMenuOpen && (
-              <div
-                style={{
-                  position: 'absolute',
-                  right: 0,
-                  top: 'calc(100% + 4px)',
-                  background: 'var(--card)',
-                  color: 'var(--fg)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 8,
-                  padding: '10px 12px',
-                  boxShadow: '0 12px 24px rgba(0,0,0,.40)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 6,
-                  minWidth: 180,
-                  zIndex: 40,
-                }}
+        <div style={{display:'flex', gap:12, alignItems:'center', marginLeft:'auto', flexWrap:'wrap', justifyContent:'flex-end'}}>
+          <div style={{display:'flex', gap:6}}>
+            <button className={tab==='all' ? 'primary' : 'ghost'} onClick={() => setTab('all')}>All</button>
+            <button className={tab==='fav' ? 'primary' : 'ghost'} onClick={() => setTab('fav')}>Favorites</button>
+          </div>
+          <div style={{display:'flex', gap:6, alignItems:'center'}}>
+            <span className="muted">Sort:</span>
+            <button className={sortKey==='date' ? 'primary' : 'ghost'} onClick={() => setSortKey('date')}>Date</button>
+            <button className={sortKey==='pnl' ? 'primary' : 'ghost'} onClick={() => setSortKey('pnl')}>PnL</button>
+            <button className={sortKey==='theta' ? 'primary' : 'ghost'} onClick={() => setSortKey('theta')}>Theta</button>
+            <button className={sortKey==='expiry' ? 'primary' : 'ghost'} onClick={() => { setSortKey('expiry'); setSortDir('asc'); }}>Expiry</button>
+            <button className="ghost" title={sortDir==='desc' ? 'Descending' : 'Ascending'} onClick={() => setSortDir(d => d==='desc'?'asc':'desc')}>{sortDir==='desc' ? '↓' : '↑'}</button>
+            <div ref={columnsMenuRef} style={{ position: 'relative', marginLeft: 12 }}>
+              <button
+                className="ghost"
+                onClick={() => setColumnsMenuOpen((open) => !open)}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 10 }}
               >
-                {COLUMN_CONFIG.map((col) => (
-                  <label key={col.key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.95em' }}>
-                    <input
-                      type="checkbox"
-                      checked={visibleColumns[col.key]}
-                      onChange={() => handleColumnToggle(col.key)}
-                    />
-                    <span>{col.label}</span>
-                  </label>
-                ))}
-              </div>
-            )}
+                Columns
+                <span style={{ fontSize: '0.9em' }}>{columnsMenuOpen ? '▴' : '▾'}</span>
+              </button>
+              {columnsMenuOpen && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    right: 0,
+                    top: 'calc(100% + 4px)',
+                    background: 'var(--card)',
+                    color: 'var(--fg)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    boxShadow: '0 12px 24px rgba(0,0,0,.40)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6,
+                    minWidth: 180,
+                    zIndex: 40,
+                  }}
+                >
+                  {COLUMN_CONFIG.map((col) => (
+                    <label key={col.key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.95em' }}>
+                      <input
+                        type="checkbox"
+                        checked={visibleColumns[col.key]}
+                        onChange={() => handleColumnToggle(col.key)}
+                      />
+                      <span>{col.label}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
-      {slowMode && (
-        <div style={{display:'flex', alignItems:'center', gap:12, marginBottom: 10, flexWrap:'wrap'}}>
-          <span className="muted">Last update: {slowStats.lastUpdated ? new Date(slowStats.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</span>
-          <span className="muted">Next: {slowStats.nextUpdate ? new Date(slowStats.nextUpdate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</span>
-          <button className="ghost" onClick={() => { void manualRefresh(); }} disabled={slowStats.refreshing}>
-            {slowStats.refreshing ? 'Refreshing…' : 'Refresh now'}
-          </button>
-          {slowStats.error && <span style={{color:'#c7762b'}}>{slowStats.error}</span>}
-        </div>
-      )}
       <div style={{overflowX: 'auto'}}>
         <table>
           <thead>
@@ -2084,6 +2092,7 @@ export function UnifiedPositionsTable() {
         />
       )}
       {editId && <EditPositionModal id={editId} onClose={() => setEditId(null)} />}
+      {showAddPosition && <AddPositionModal onClose={() => setShowAddPosition(false)} />}
     </div>
   );
 }
