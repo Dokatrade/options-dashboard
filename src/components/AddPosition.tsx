@@ -5,16 +5,11 @@ import { useSlowMode } from '../contexts/SlowModeContext';
 import { useStore } from '../store/store';
 import type { InstrumentInfo, Leg, OptionType, SpreadPosition } from '../utils/types';
 import { ensureUsdtSymbol } from '../utils/symbols';
-
-type DraftLeg = {
-  leg: Leg;
-  side: 'short' | 'long';
-  qty: number;
-};
-
-function dteFrom(ms: number) {
-  return Math.max(0, Math.round((ms - Date.now()) / (1000 * 60 * 60 * 24)));
-}
+import { FiltersPanel } from './add-position/FiltersPanel';
+import { OptionChainTable } from './add-position/OptionChainTable';
+import { SelectionPanel } from './add-position/SelectionPanel';
+import { DraftTable } from './add-position/DraftTable';
+import type { ChainRow, DraftLeg } from './add-position/types';
 
 export function AddPosition() {
   const addSpread = useStore((s) => s.addSpread);
@@ -24,7 +19,7 @@ export function AddPosition() {
   const [optType, setOptType] = React.useState<OptionType>('P');
   const [expiry, setExpiry] = React.useState<number | ''>('');
   const [chain, setChain] = React.useState<InstrumentInfo[]>([]);
-  const [strike, setStrike] = React.useState<string>('');
+  const [selectedSymbol, setSelectedSymbol] = React.useState<string>('');
   const [qty, setQty] = React.useState<number>(1);
   const [draft, setDraft] = React.useState<DraftLeg[]>([]);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
@@ -253,7 +248,11 @@ export function AddPosition() {
       const d = JSON.parse(raw);
       if (d?.optType === 'P' || d?.optType === 'C') setOptType(d.optType);
       if (typeof d?.expiry === 'number' || d?.expiry === '') setExpiry(d.expiry);
-      if (typeof d?.strike === 'string') setStrike(d.strike);
+      if (typeof d?.selectedSymbol === 'string') {
+        setSelectedSymbol(d.selectedSymbol);
+      } else if (typeof d?.strike === 'string') {
+        setSelectedSymbol(d.strike);
+      }
       if (typeof d?.qty === 'number') setQty(d.qty);
       if (typeof d?.deltaMin === 'number') setDeltaMin(d.deltaMin);
       if (typeof d?.deltaMax === 'number') setDeltaMax(d.deltaMax);
@@ -280,14 +279,16 @@ export function AddPosition() {
   React.useEffect(() => {
     const id = setTimeout(() => {
       const payload = {
-        optType, expiry, strike, qty,
+        optType, expiry, selectedSymbol, qty,
         deltaMin, deltaMax, minOI, maxSpread, showAllStrikes,
         draft,
       };
-      try { localStorage.setItem('options-draft-v1', JSON.stringify(payload)); } catch {}
+      try {
+        localStorage.setItem('options-draft-v1', JSON.stringify({ ...payload, strike: selectedSymbol }));
+      } catch {}
     }, 300);
     return () => clearTimeout(id);
-  }, [optType, expiry, strike, qty, deltaMin, deltaMax, minOI, maxSpread, draft]);
+  }, [optType, expiry, selectedSymbol, qty, deltaMin, deltaMax, minOI, maxSpread, draft, showAllStrikes]);
 
   // Live pricing in dropdown and draft
   React.useEffect(() => {
@@ -328,8 +329,106 @@ export function AddPosition() {
     });
   }, [chain, tickers, deltaMin, deltaMax, minOI, maxSpread, showAllStrikes]);
 
+  const formatChainRow = React.useCallback((inst: InstrumentInfo): ChainRow => {
+    const ticker = tickers[inst.symbol] || {};
+    const { bid, ask } = bestBidAsk(ticker);
+    const mid = midPrice(ticker);
+    const delta = ticker?.delta != null ? Number(ticker.delta) : undefined;
+    const openInterest = ticker?.openInterest != null ? Number(ticker.openInterest) : undefined;
+    const spread = bid != null && ask != null ? Math.max(0, Number(ask) - Number(bid)) : undefined;
+    const mark = ticker?.markPrice != null ? Number(ticker.markPrice) : undefined;
+    return {
+      symbol: inst.symbol,
+      strike: inst.strike,
+      expiryMs: inst.deliveryTime,
+      optionType: inst.optionType,
+      bid: bid != null ? Number(bid) : undefined,
+      ask: ask != null ? Number(ask) : undefined,
+      mid: mid != null ? Number(mid) : undefined,
+      delta,
+      openInterest,
+      spread,
+      mark,
+    };
+  }, [tickers]);
+
+  const chainRows = React.useMemo(() => filteredChain.map(formatChainRow), [filteredChain, formatChainRow]);
+
+  const selectedRow = React.useMemo(() => {
+    if (!selectedSymbol) return undefined;
+    const inFiltered = chainRows.find((row) => row.symbol === selectedSymbol);
+    if (inFiltered) return inFiltered;
+    const inst = chain.find((c) => c.symbol === selectedSymbol);
+    return inst ? formatChainRow(inst) : undefined;
+  }, [chainRows, chain, formatChainRow, selectedSymbol]);
+
+  const spotTicker = tickers['ETHUSDT'] || {};
+  const spotPrice = React.useMemo(() => {
+    const mark = spotTicker?.markPrice;
+    if (mark != null && !Number.isNaN(Number(mark))) return Number(mark);
+    const index = spotTicker?.indexPrice;
+    if (index != null && !Number.isNaN(Number(index))) return Number(index);
+    return undefined;
+  }, [spotTicker]);
+
+  const handleTypeChange = React.useCallback((type: OptionType) => {
+    setOptType(type);
+    setExpiry('');
+    setSelectedSymbol('');
+  }, []);
+
+  const handleExpiryChange = React.useCallback((value: number | '') => {
+    setExpiry(value);
+    setSelectedSymbol('');
+  }, []);
+
+  const handleSelectSymbol = React.useCallback((symbol: string) => {
+    setSelectedSymbol(symbol);
+  }, []);
+
+  const handleQtyChange = React.useCallback((value: number) => {
+    const clamped = Math.max(0.1, Math.round(Number(value) * 10) / 10 || 0.1);
+    setQty(clamped);
+  }, []);
+
+  const handleDeltaMinChange = React.useCallback((value: number) => {
+    setDeltaMin(Number.isFinite(value) ? value : 0);
+  }, []);
+
+  const handleDeltaMaxChange = React.useCallback((value: number) => {
+    setDeltaMax(Number.isFinite(value) ? value : 0);
+  }, []);
+
+  const handleMinOiChange = React.useCallback((value: number) => {
+    setMinOI(Math.max(0, Number.isFinite(value) ? Math.round(value) : 0));
+  }, []);
+
+  const handleMaxSpreadChange = React.useCallback((value: number) => {
+    setMaxSpread(Math.max(0, Number.isFinite(value) ? value : 0));
+  }, []);
+
+  const handleShowAllToggle = React.useCallback((value: boolean) => {
+    setShowAllStrikes(value);
+  }, []);
+
+  const updateDraftQty = React.useCallback((index: number, nextQty: number) => {
+    setDraft((prev) => prev.map((item, i) => {
+      if (i !== index) return item;
+      const numeric = Number.isFinite(nextQty) ? nextQty : item.qty;
+      const sanitized = Math.max(0.1, Math.round(numeric * 10) / 10);
+      return { ...item, qty: sanitized };
+    }));
+  }, []);
+
+  const clearDraft = React.useCallback(() => {
+    setDraft([]);
+    try { localStorage.removeItem('options-draft-v1'); } catch {}
+  }, []);
+
+  const emptyChainMessage = expiry ? undefined : 'Select expiry to view options.';
+
   const addLeg = (side: 'short' | 'long') => {
-    const inst = chain.find(c => c.symbol === strike);
+    const inst = chain.find(c => c.symbol === selectedSymbol);
     if (!inst) return;
     const leg: Leg = { symbol: inst.symbol, strike: inst.strike, optionType: inst.optionType, expiryMs: inst.deliveryTime };
     const q = Math.max(0.1, Math.round(Number(qty) * 10) / 10);
@@ -387,7 +486,7 @@ export function AddPosition() {
       };
       addSpread(payload);
       setDraft([]);
-      setStrike('');
+      setSelectedSymbol('');
     } else {
       // Save generic multi-leg position with per-leg entry prices
       const now = Date.now();
@@ -401,130 +500,67 @@ export function AddPosition() {
       }));
       addPosition({ legs });
       setDraft([]);
-      setStrike('');
+      setSelectedSymbol('');
     }
   };
 
   return (
-    <div>
-      <h3>Add Position</h3>
-      {loading && <div className="muted">Loading instruments…</div>}
-      <div className="grid">
-        <label>
-          <div className="muted">Type</div>
-          <select value={optType} onChange={(e) => { setOptType(e.target.value as OptionType); setExpiry(''); setStrike(''); }}>
-            <option value="P">PUT</option>
-            <option value="C">CALL</option>
-          </select>
-        </label>
-        <label>
-          <div className="muted">Δ range</div>
-          <div style={{display:'flex', gap: 6}}>
-            <input type="number" step={0.01} min={0} max={1} value={deltaMin} onChange={(e) => setDeltaMin(Number(e.target.value))} style={{width:80}} />
-            <span>to</span>
-            <input type="number" step={0.01} min={0} max={1} value={deltaMax} onChange={(e) => setDeltaMax(Number(e.target.value))} style={{width:80}} />
-          </div>
-        </label>
-        <label>
-          <div className="muted">Min OI</div>
-          <input type="number" min={0} step={1} value={minOI} onChange={(e) => setMinOI(Number(e.target.value)||0)} />
-        </label>
-        <label>
-          <div className="muted">Max spread ($)</div>
-          <input type="number" min={0} step={0.01} value={maxSpread} onChange={(e) => setMaxSpread(Number(e.target.value)||0)} />
-        </label>
-        <label style={{display:'flex', alignItems:'end', gap:6}}>
-          <input type="checkbox" checked={showAllStrikes} onChange={(e)=> setShowAllStrikes(e.target.checked)} />
-          <span className="muted">Show all strikes</span>
-        </label>
-        <label>
-          <div className="muted">Expiry</div>
-          <select value={expiry} onChange={(e) => { const v = e.target.value; setExpiry(v === '' ? '' : Number(v)); setStrike(''); }}>
-            <option value="">Select expiry</option>
-            {expiries.map((ms) => (
-              <option key={ms} value={ms}>{new Date(ms).toISOString().slice(0,10)} · {dteFrom(ms)}d</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <div className="muted">Option</div>
-          <select value={strike} onChange={(e) => setStrike(e.target.value)} disabled={!expiry}>
-            <option value="">Select strike</option>
-            {filteredChain.map((i) => {
-              const t = tickers[i.symbol];
-              const { bid: b, ask: a } = bestBidAsk(t);
-              const m = (b != null && a != null) ? (Number(b) + Number(a)) / 2 : undefined; // strict mid from book
-              const d = t?.delta != null ? Math.abs(Number(t.delta)) : undefined;
-              const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
-              const label = Number.isFinite(i.strike)
-                ? `${i.strike} — ${m != null ? '$'+m.toFixed(2) : (b!=null && a!=null ? `$${b.toFixed(2)}/${a.toFixed(2)}` : '—')} · Δ ${d!=null? d.toFixed(2):'—'} · OI ${oi!=null? oi: '—'}`
-                : i.symbol;
-              return <option key={i.symbol} value={i.symbol}>{label}</option>;
-            })}
-          </select>
-        </label>
-        <label>
-          <div className="muted">Volume (qty)</div>
-          <input type="number" min={0.1} step={0.1} value={qty} onChange={(e) => setQty(Math.max(0.1, Number(e.target.value) || 0.1))} />
-        </label>
-        <div style={{display:'flex', alignItems:'end', gap: 8, flexWrap:'wrap'}}>
-          <button type="button" className="ghost" disabled={!strike} onClick={() => addLeg('short')}>Add Short</button>
-          <button type="button" className="ghost" disabled={!strike} onClick={() => addLeg('long')}>Add Long</button>
-          <span className="muted" style={{margin:'0 6px'}}>or</span>
-          <button type="button" className="ghost" onClick={() => addPerpLeg('short')}>Add Perp Short (ETHUSDT)</button>
-          <button type="button" className="ghost" onClick={() => addPerpLeg('long')}>Add Perp Long (ETHUSDT)</button>
-          <button type="button" className="ghost" onClick={() => { setDraft([]); localStorage.removeItem('options-draft-v1'); }}>Clear draft</button>
+    <div className="add-position">
+      <div className="add-position__header">
+        <h3>Add Position</h3>
+        {loading && <div className="muted">Loading instruments…</div>}
+      </div>
+      <div className="add-position__grid">
+        <div className="add-position__column add-position__column--filters">
+          <FiltersPanel
+            optType={optType}
+            expiry={expiry}
+            expiries={expiries}
+            deltaMin={deltaMin}
+            deltaMax={deltaMax}
+            minOI={minOI}
+            maxSpread={maxSpread}
+            showAllStrikes={showAllStrikes}
+            loading={loading}
+            slowMode={slowMode}
+            spotPrice={spotPrice}
+            onTypeChange={handleTypeChange}
+            onExpiryChange={handleExpiryChange}
+            onDeltaMinChange={handleDeltaMinChange}
+            onDeltaMaxChange={handleDeltaMaxChange}
+            onMinOiChange={handleMinOiChange}
+            onMaxSpreadChange={handleMaxSpreadChange}
+            onToggleShowAll={handleShowAllToggle}
+          />
+          <SelectionPanel
+            selectedRow={selectedRow}
+            qty={qty}
+            onQtyChange={handleQtyChange}
+            onAddLeg={addLeg}
+            onAddPerp={addPerpLeg}
+            onClearSelection={() => setSelectedSymbol('')}
+          />
+        </div>
+        <div className="add-position__column add-position__column--chain">
+          <OptionChainTable
+            rows={chainRows}
+            loading={loading}
+            selectedSymbol={selectedSymbol}
+            onSelect={handleSelectSymbol}
+            emptyMessage={emptyChainMessage}
+          />
         </div>
       </div>
-
-      {/* Draft table */}
-      <div style={{marginTop: 12}}>
-        <div className="muted">Position builder</div>
-        {draft.length === 0 ? (
-          <div className="muted">No legs added yet.</div>
-        ) : (
-          <div style={{overflowX:'auto'}}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Expiry</th>
-                  <th>Strike</th>
-                  <th>Side</th>
-                  <th>Qty</th>
-                  <th>Mid now</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {draft.map((d, idx) => {
-                  const t = tickers[d.leg.symbol];
-                  const m = midPrice(t);
-                  const isPerp = !d.leg.symbol.includes('-');
-                  return (
-                    <tr key={idx}>
-                      <td>{isPerp ? 'PERP' : d.leg.optionType}</td>
-                      <td>{isPerp ? '—' : new Date(d.leg.expiryMs).toISOString().slice(0,10)}</td>
-                      <td>{isPerp ? '—' : d.leg.strike}</td>
-                      <td>{d.side}</td>
-                      <td>{d.qty}</td>
-                      <td>{m != null ? `$${m.toFixed(2)}` : '—'}</td>
-                      <td><button className="ghost" onClick={() => removeLeg(idx)}>Remove</button></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginTop: 8}}>
-          <div className="muted">Net credit (mid, total): {draft.length ? `$${totalCreditPer.toFixed(2)}` : '—'}</div>
-          <button className="primary" type="button" disabled={!draft.length} onClick={onSave}>Save</button>
-        </div>
-        {!canSaveAsVertical && draft.length > 0 && (
-          <div className="muted" style={{marginTop: 6}}>Note: saving to main table поддерживает пока только 2 ноги одинаковой экспирации, равный объём и противоположные стороны.</div>
-        )}
-      </div>
+      <DraftTable
+        draft={draft}
+        tickers={tickers}
+        canSaveAsVertical={canSaveAsVertical}
+        totalCreditPer={totalCreditPer}
+        onRemoveLeg={removeLeg}
+        onUpdateQty={updateDraftQty}
+        onClearDraft={clearDraft}
+        onSave={onSave}
+      />
     </div>
   );
 }

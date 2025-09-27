@@ -19,10 +19,26 @@ type State = {
   importState: (data: { spreads?: any[]; positions?: any[]; settings?: Partial<PortfolioSettings> }) => { ok: boolean; error?: string };
   toggleFavoriteSpread: (id: string) => void;
   toggleFavoritePosition: (id: string) => void;
+  setSpreadSettlement: (id: string, expiryMs: number, settleUnderlying?: number) => void;
+  setPositionSettlement: (id: string, expiryMs: number, settleUnderlying?: number) => void;
 };
 
 function normalizeLegSymbol<T extends { symbol: string }>(leg: T): T {
   return { ...leg, symbol: ensureUsdtSymbol(leg.symbol) };
+}
+
+function normalizeSettlementsMap(raw: any) {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const entries = Object.entries(raw).map(([key, value]) => {
+    const settleUnderlying = Number((value as any)?.settleUnderlying);
+    const settledAt = Number((value as any)?.settledAt);
+    if (!(Number.isFinite(settleUnderlying) && settleUnderlying > 0)) return null;
+    return [String(key), {
+      settleUnderlying,
+      settledAt: Number.isFinite(settledAt) ? settledAt : Date.now(),
+    }] as const;
+  }).filter(Boolean) as Array<[string, { settleUnderlying: number; settledAt: number }]>;
+  return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
 export const useStore = create<State>()(
@@ -42,18 +58,23 @@ export const useStore = create<State>()(
         ]
       })),
       addPosition: (p) => set((st) => {
-        const posCreatedAt = Date.now();
+        const baseCreatedRaw = Number((p as any)?.createdAt);
+        const baseCreatedAt = Number.isFinite(baseCreatedRaw) ? baseCreatedRaw : Date.now();
         let legOffset = 0;
         const legs = (p.legs ?? []).map((leg) => {
           const legCreatedAtRaw = Number((leg as any)?.createdAt);
-          const createdAt = Number.isFinite(legCreatedAtRaw) ? legCreatedAtRaw : (posCreatedAt + legOffset++);
+          const createdAt = Number.isFinite(legCreatedAtRaw) ? legCreatedAtRaw : (baseCreatedAt + legOffset++);
           return { ...leg, createdAt };
         });
+        const legsTimes = legs
+          .map((leg) => Number(leg.createdAt))
+          .filter((v): v is number => Number.isFinite(v));
+        const createdAt = legsTimes.length ? Math.min(...legsTimes) : baseCreatedAt;
         return {
           positions: [
             {
               id: crypto.randomUUID(),
-              createdAt: posCreatedAt,
+              createdAt,
               ...p,
               legs,
             },
@@ -76,18 +97,64 @@ export const useStore = create<State>()(
           const updated = updater(p);
           if (!updated) return p;
           const now = Date.now();
+          const baseCreatedRaw = Number((updated as any)?.createdAt);
+          const baseCreatedAt = Number.isFinite(baseCreatedRaw) ? baseCreatedRaw : now;
           let legOffset = 0;
           const legs = (updated.legs ?? []).map((leg) => {
             const legCreatedAtRaw = Number((leg as any)?.createdAt);
-            const createdAt = Number.isFinite(legCreatedAtRaw) ? legCreatedAtRaw : (now + legOffset++);
+            const createdAt = Number.isFinite(legCreatedAtRaw) ? legCreatedAtRaw : (baseCreatedAt + legOffset++);
             return { ...leg, createdAt };
           });
-          return { ...updated, legs };
+          const legsTimes = legs
+            .map((leg) => Number(leg.createdAt))
+            .filter((v): v is number => Number.isFinite(v));
+          const createdAt = legsTimes.length ? Math.min(...legsTimes) : baseCreatedAt;
+          return { ...updated, createdAt, legs };
         })
       })),
       setDeposit: (v) => set((st) => ({ settings: { ...st.settings, depositUsd: v } })),
       toggleFavoriteSpread: (id) => set((st) => ({ spreads: st.spreads.map((p) => (p.id === id ? { ...p, favorite: !p.favorite } : p)) })),
       toggleFavoritePosition: (id) => set((st) => ({ positions: st.positions.map((p) => (p.id === id ? { ...p, favorite: !p.favorite } : p)) })),
+      setSpreadSettlement: (id, expiryMs, settleUnderlying) => set((st) => ({
+        spreads: st.spreads.map((p) => {
+          if (p.id !== id) return p;
+          const key = String(expiryMs);
+          const existing = p.settlements ?? {};
+          if (!(settleUnderlying != null && Number.isFinite(settleUnderlying) && settleUnderlying > 0)) {
+            if (!existing[key]) return p;
+            const { [key]: _removed, ...rest } = existing;
+            const next = Object.keys(rest).length ? rest : undefined;
+            return { ...p, settlements: next };
+          }
+          return {
+            ...p,
+            settlements: {
+              ...existing,
+              [key]: { settleUnderlying, settledAt: Date.now() }
+            }
+          };
+        })
+      })),
+      setPositionSettlement: (id, expiryMs, settleUnderlying) => set((st) => ({
+        positions: st.positions.map((p) => {
+          if (p.id !== id) return p;
+          const key = String(expiryMs);
+          const existing = p.settlements ?? {};
+          if (!(settleUnderlying != null && Number.isFinite(settleUnderlying) && settleUnderlying > 0)) {
+            if (!existing[key]) return p;
+            const { [key]: _removed, ...rest } = existing;
+            const next = Object.keys(rest).length ? rest : undefined;
+            return { ...p, settlements: next };
+          }
+          return {
+            ...p,
+            settlements: {
+              ...existing,
+              [key]: { settleUnderlying, settledAt: Date.now() }
+            }
+          };
+        })
+      })),
       importState: (data) => {
         try {
           const spreadsIn = Array.isArray(data?.spreads) ? data!.spreads : [];
@@ -113,6 +180,7 @@ export const useStore = create<State>()(
               qty,
               note: typeof p?.note === 'string' ? p.note : undefined,
               favorite: typeof p?.favorite === 'boolean' ? p.favorite : undefined,
+              settlements: normalizeSettlementsMap(p?.settlements),
               short: normalizeLegSymbol({
                 symbol: String(short?.symbol || ''),
                 strike: Number(short?.strike) || 0,
@@ -149,9 +217,29 @@ export const useStore = create<State>()(
                 entryPrice: Number(l?.entryPrice) || 0,
                 createdAt: legCreatedAt,
                 hidden: typeof l?.hidden === 'boolean' ? l.hidden : undefined,
+                settleS: (() => {
+                  const raw = Number((l as any)?.settleS);
+                  return Number.isFinite(raw) && raw > 0 ? raw : undefined;
+                })(),
+                settledAt: (() => {
+                  const raw = Number((l as any)?.settledAt);
+                  return Number.isFinite(raw) ? raw : undefined;
+                })(),
               };
             }).filter((l: any) => l.leg.symbol) : [];
-            return { id, createdAt, closedAt, note, legs, favorite: typeof p?.favorite === 'boolean' ? p.favorite : undefined } as Position;
+            const legTimes = legs
+              .map((leg: any) => Number(leg?.createdAt))
+              .filter((v: number) => Number.isFinite(v));
+            const posCreatedAt = legTimes.length ? Math.min(...legTimes) : createdAt;
+            return {
+              id,
+              createdAt: posCreatedAt,
+              closedAt,
+              note,
+              legs,
+              favorite: typeof p?.favorite === 'boolean' ? p.favorite : undefined,
+              settlements: normalizeSettlementsMap(p?.settlements),
+            } as Position;
           }).filter((p) => p.legs.length > 0);
 
           set((st) => ({
@@ -170,32 +258,70 @@ export const useStore = create<State>()(
     }),
     {
       name: 'options-dashboard',
-      version: 2,
+      version: 4,
       migrate: (state: any, version) => {
-        if (!state || version >= 2) return state as State;
-        const normalizeLeg = (leg: any) => ({
-          ...leg,
-          symbol: ensureUsdtSymbol(leg?.symbol || ''),
-        });
-        const spreads = Array.isArray(state.spreads)
-          ? state.spreads.map((s: any) => ({
-              ...s,
-              short: normalizeLeg(s?.short || {}),
-              long: normalizeLeg(s?.long || {}),
-            }))
-          : state.spreads;
-        const positions = Array.isArray(state.positions)
-          ? state.positions.map((p: any) => ({
-              ...p,
-              legs: Array.isArray(p?.legs)
-                ? p.legs.map((l: any) => ({
-                    ...l,
-                    leg: normalizeLeg(l?.leg || {}),
-                  }))
-                : p?.legs,
-            }))
-          : state.positions;
-        return { ...state, spreads, positions } as State;
+        if (!state) return state as State;
+        let nextState = state;
+
+        if (version < 2) {
+          const normalizeLeg = (leg: any) => ({
+            ...leg,
+            symbol: ensureUsdtSymbol(leg?.symbol || ''),
+          });
+          const spreads = Array.isArray(nextState.spreads)
+            ? nextState.spreads.map((s: any) => ({
+                ...s,
+                short: normalizeLeg(s?.short || {}),
+                long: normalizeLeg(s?.long || {}),
+              }))
+            : nextState.spreads;
+          const positions = Array.isArray(nextState.positions)
+            ? nextState.positions.map((p: any) => ({
+                ...p,
+                legs: Array.isArray(p?.legs)
+                  ? p.legs.map((l: any) => ({
+                      ...l,
+                      leg: normalizeLeg(l?.leg || {}),
+                    }))
+                  : p?.legs,
+              }))
+            : nextState.positions;
+          nextState = { ...nextState, spreads, positions };
+        }
+
+        if (version < 3) {
+          const spreads = Array.isArray(nextState.spreads)
+            ? nextState.spreads.map((s: any) => ({
+                ...s,
+                settlements: normalizeSettlementsMap(s?.settlements),
+              }))
+            : nextState.spreads;
+          const positions = Array.isArray(nextState.positions)
+            ? nextState.positions.map((p: any) => ({
+                ...p,
+                settlements: normalizeSettlementsMap(p?.settlements),
+              }))
+            : nextState.positions;
+          nextState = { ...nextState, spreads, positions };
+        }
+
+        if (version < 4) {
+          const adjustPositions = Array.isArray(nextState.positions)
+            ? nextState.positions.map((p: any) => {
+                if (!Array.isArray(p?.legs)) return p;
+                const legTimes = p.legs
+                  .map((leg: any) => Number(leg?.createdAt))
+                  .filter((v: number) => Number.isFinite(v));
+                if (!legTimes.length) return p;
+                const earliest = Math.min(...legTimes);
+                if (Number(p?.createdAt) === earliest) return p;
+                return { ...p, createdAt: earliest };
+              })
+            : nextState.positions;
+          nextState = { ...nextState, positions: adjustPositions };
+        }
+
+        return nextState as State;
       }
     }
   )

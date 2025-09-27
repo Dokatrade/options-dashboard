@@ -1,10 +1,10 @@
 import React from 'react';
 import { useStore } from '../store/store';
 import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
-import { midPrice, bestBidAsk, fetchOptionTickers, fetchHV30, fetchOrderbookL1, fetchSpotEth } from '../services/bybit';
+import { midPrice, bestBidAsk, fetchOptionTickers, fetchHV30, fetchOrderbookL1, fetchSpotEth, fetchOptionDeliveryPrice } from '../services/bybit';
 import type { HV30Stats } from '../services/bybit';
 import { bsImpliedVol } from '../utils/bs';
-import type { Position, PositionLeg, SpreadPosition } from '../utils/types';
+import type { Position, PositionLeg, SpreadPosition, SettlementMap } from '../utils/types';
 import { downloadCSV, toCSV } from '../utils/csv';
 import { PositionView } from './PositionView';
 import { EditPositionModal } from './EditPositionModal';
@@ -31,6 +31,22 @@ type Row = {
   cEnter?: number; // per contract
   qty?: number;
   favorite?: boolean;
+  settlements?: SettlementMap;
+};
+
+type LegSnapshot = PositionLeg & {
+  bid?: number;
+  ask?: number;
+  mid?: number;
+  exec?: number;
+  pnlMid?: number;
+  pnlExec?: number;
+  spread?: number;
+  oi?: number;
+  greeks?: { delta?: number; gamma?: number; vega?: number; theta?: number };
+  settleS?: number;
+  settledAt?: number;
+  settled?: boolean;
 };
 
 type ColumnKey =
@@ -47,6 +63,17 @@ type ColumnKey =
   | 'liquidity'
   | 'actions';
 
+type ActionKey =
+  | 'favorite'
+  | 'expand'
+  | 'view'
+  | 'edit'
+  | 'if'
+  | 'notes'
+  | 'settle'
+  | 'close'
+  | 'delete';
+
 const COLUMN_CONFIG: Array<{ key: ColumnKey; label: string }> = [
   { key: 'type', label: 'Type' },
   { key: 'legs', label: 'Legs' },
@@ -61,6 +88,18 @@ const COLUMN_CONFIG: Array<{ key: ColumnKey; label: string }> = [
   { key: 'liquidity', label: 'Liquidity' },
   { key: 'actions', label: 'Actions' },
 ];
+
+const ACTION_LABELS: Record<ActionKey, string> = {
+  favorite: 'Favorite',
+  expand: 'Expand',
+  view: 'View',
+  edit: 'Edit',
+  if: 'IF Rules',
+  notes: 'Notes',
+  settle: 'Settle',
+  close: 'Close',
+  delete: 'Delete',
+};
 
 const typeColumnStyle: React.CSSProperties = {
   minWidth: 120,
@@ -102,6 +141,7 @@ function fromSpread(s: SpreadPosition): Row {
     cEnter: s.cEnter,
     qty: s.qty ?? 1,
     favorite: s.favorite,
+    settlements: s.settlements,
   };
 }
 
@@ -114,6 +154,7 @@ function fromPosition(p: Position): Row {
     closedAt: p.closedAt,
     note: p.note,
     favorite: p.favorite,
+    settlements: p.settlements,
   };
 }
 
@@ -129,8 +170,11 @@ export function UnifiedPositionsTable() {
   const addPosition = useStore((s) => s.addPosition);
   const toggleFavoriteSpread = useStore((s) => s.toggleFavoriteSpread);
   const toggleFavoritePosition = useStore((s) => s.toggleFavoritePosition);
-  const [showClosed, setShowClosed] = React.useState(false);
-  const [useExecPnl, setUseExecPnl] = React.useState(false);
+  const setSpreadSettlement = useStore((s) => s.setSpreadSettlement);
+  const setPositionSettlement = useStore((s) => s.setPositionSettlement);
+  const [showClosed, setShowClosed] = React.useState(true);
+  const [hideExpired, setHideExpired] = React.useState(true);
+  const [useExecPnl, setUseExecPnl] = React.useState(true);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
   const [view, setView] = React.useState<Row | null>(null);
   const [editId, setEditId] = React.useState<string | null>(null);
@@ -142,6 +186,7 @@ export function UnifiedPositionsTable() {
   const [sortDir, setSortDir] = React.useState<'asc'|'desc'>('desc');
   const { slowMode, setSlowMode: setGlobalSlowMode, slowStats, manualRefresh, register } = useSlowMode();
   const rowsRef = React.useRef<Row[]>([]);
+  const autoSettleAttemptRef = React.useRef<Map<string, number>>(new Map());
   const [hvStats, setHvStats] = React.useState<HV30Stats | undefined>();
   const [rPct, setRPct] = React.useState(0);
   const [ifRow, setIfRow] = React.useState<Row | null>(null);
@@ -204,6 +249,22 @@ export function UnifiedPositionsTable() {
   });
   const [columnsMenuOpen, setColumnsMenuOpen] = React.useState(false);
   const columnsMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const [settleTarget, setSettleTarget] = React.useState<Row | null>(null);
+  const [actionMenuOpen, setActionMenuOpen] = React.useState(false);
+  const actionMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  const DEFAULT_ACTION_VISIBILITY: Record<ActionKey, boolean> = React.useMemo(() => ({
+    favorite: true,
+    expand: true,
+    view: true,
+    edit: true,
+    if: true,
+    notes: true,
+    settle: true,
+    close: true,
+    delete: true,
+  }), []);
+  const [actionVisibility, setActionVisibility] = React.useState<Record<ActionKey, boolean>>(DEFAULT_ACTION_VISIBILITY);
   const handleDeleteLeg = React.useCallback((row: Row, legIndex: number): boolean => {
     if (!row.id.startsWith('P:')) return false;
     if (!window.confirm('Delete this leg from the position? This cannot be undone.')) return false;
@@ -279,6 +340,37 @@ export function UnifiedPositionsTable() {
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [columnsMenuOpen]);
+
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem('positions-actions-v1');
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return;
+      setActionVisibility((prev) => {
+        const next = { ...prev };
+        (Object.keys(next) as ActionKey[]).forEach((key) => {
+          const value = (parsed as Record<string, unknown>)[key];
+          if (typeof value === 'boolean') next[key] = value;
+        });
+        return next;
+      });
+    } catch {}
+  }, []);
+
+  React.useEffect(() => {
+    try { localStorage.setItem('positions-actions-v1', JSON.stringify(actionVisibility)); } catch {}
+  }, [actionVisibility]);
+
+  React.useEffect(() => {
+    if (!actionMenuOpen) return;
+    const handleClick = (event: MouseEvent) => {
+      if (!actionMenuRef.current) return;
+      if (!actionMenuRef.current.contains(event.target as Node)) setActionMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [actionMenuOpen]);
 
   const visibleColumnCount = React.useMemo(() => {
     return COLUMN_CONFIG.reduce((acc, col) => acc + (visibleColumns[col.key] ? 1 : 0), 0) || COLUMN_CONFIG.length;
@@ -374,19 +466,20 @@ export function UnifiedPositionsTable() {
         if (typeof s?.showClosed === 'boolean') setShowClosed(s.showClosed);
         if (typeof s?.useExecPnl === 'boolean') setUseExecPnl(s.useExecPnl);
         if (typeof s?.slowMode === 'boolean') setGlobalSlowMode(s.slowMode);
+        if (typeof s?.hideExpired === 'boolean') setHideExpired(s.hideExpired);
       }
     } catch {}
   }, []);
 
   // Persist UI prefs
   React.useEffect(() => {
-    const payload = { tab, sortKey, sortDir, showClosed, useExecPnl };
+    const payload = { tab, sortKey, sortDir, showClosed, useExecPnl, hideExpired, slowMode };
     try {
       const raw = localStorage.getItem('positions-ui-v1');
       const base = raw ? JSON.parse(raw) : {};
       localStorage.setItem('positions-ui-v1', JSON.stringify({ ...base, ...payload }));
     } catch {}
-  }, [tab, sortKey, sortDir, showClosed, useExecPnl]);
+  }, [tab, sortKey, sortDir, showClosed, useExecPnl, hideExpired, slowMode]);
 
   // Gamma removed from tables
 
@@ -395,15 +488,75 @@ export function UnifiedPositionsTable() {
       ...spreads.map(fromSpread),
       ...positions.map(fromPosition),
     ].filter(r => (showClosed ? true : !r.closedAt));
-    // Optional filter by favorites
-    const filtered = tab === 'fav' ? list.filter(r => !!r.favorite) : list;
-    // Base order; actual sort by metrics is applied at render time when calc() is available.
-    return filtered;
-  }, [spreads, positions, showClosed, tab]);
+    const byFavorite = tab === 'fav' ? list.filter(r => !!r.favorite) : list;
+    const byExpiry = hideExpired ? byFavorite.filter(r => describeExpiry(r).state !== 'expired') : byFavorite;
+    return byExpiry;
+  }, [spreads, positions, showClosed, tab, hideExpired]);
+
+  const runAutoSettle = React.useCallback(async () => {
+    const rowsSnapshot = rowsRef.current;
+    const now = Date.now();
+    const attemptMap = autoSettleAttemptRef.current;
+    const tasks: Array<Promise<void>> = [];
+    rowsSnapshot.forEach((row) => {
+      const isSpread = row.id.startsWith('S:');
+      const rawId = row.id.slice(2);
+      const settlements = row.settlements ?? {};
+      const groups = new Map<number, PositionLeg>();
+      row.legs.forEach((leg) => {
+        if (leg.hidden) return;
+        const expiryMs = Number(leg.leg.expiryMs) || 0;
+        if (!(expiryMs > 0 && expiryMs <= now)) return;
+        if (settlements[String(expiryMs)]) return;
+        const symbol = String(leg.leg.symbol || '');
+        if (!symbol.includes('-')) return;
+        if (!groups.has(expiryMs)) groups.set(expiryMs, leg);
+      });
+      groups.forEach((leg, expiryMs) => {
+        const key = `${row.id}:${expiryMs}`;
+        const lastAttempt = attemptMap.get(key);
+        if (lastAttempt != null && now - lastAttempt < 5 * 60 * 1000) return;
+        attemptMap.set(key, now);
+        tasks.push((async () => {
+          try {
+            const price = await fetchOptionDeliveryPrice(leg.leg.symbol);
+            if (!(price != null && isFinite(price) && price > 0)) return;
+            if (isSpread) setSpreadSettlement(rawId, expiryMs, price);
+            else setPositionSettlement(rawId, expiryMs, price);
+          } catch {
+            // ignore single failure
+          }
+        })());
+      });
+
+      if (!row.closedAt) {
+        const optionLegs = row.legs.filter((leg) => {
+          if (leg.hidden) return false;
+          const symbol = String(leg.leg.symbol || '');
+          const expiryMs = Number(leg.leg.expiryMs) || 0;
+          return symbol.includes('-') && expiryMs > 0;
+        });
+        if (optionLegs.length && optionLegs.every((leg) => Number(leg.leg.expiryMs) <= now)) {
+          if (isSpread) markClosed(rawId); else closePosition(rawId);
+        }
+      }
+    });
+    if (tasks.length) {
+      try { await Promise.allSettled(tasks); } catch {}
+    }
+  }, [setPositionSettlement, setSpreadSettlement]);
 
   React.useEffect(() => {
     rowsRef.current = rows;
-  }, [rows]);
+    void runAutoSettle();
+  }, [rows, runAutoSettle]);
+
+  React.useEffect(() => {
+    const timer = setInterval(() => {
+      void runAutoSettle();
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, [runAutoSettle]);
 
   const mergeTickerUpdate = React.useCallback((sym: string, payload: Record<string, any>) => {
     setTickers(prev => {
@@ -577,16 +730,123 @@ export function UnifiedPositionsTable() {
   }, [ifTemplates]);
 
   // Helpers to compute per-leg metrics consistent with View
-  const computeSpotForRow = (r: Row): number | undefined => {
-    // Prefer real spot for IF, fallback to any leg's indexPrice
+  function settlementForLeg(r: Row, L: PositionLeg) {
+    const expiryMs = Number(L.leg.expiryMs) || 0;
+    if (!(expiryMs > 0)) return undefined;
+    const map = r.settlements;
+    if (!map) return undefined;
+    const entry = map[String(expiryMs)];
+    if (!entry) return undefined;
+    const settleUnderlying = Number(entry?.settleUnderlying);
+    if (!(Number.isFinite(settleUnderlying) && settleUnderlying > 0)) return undefined;
+    return entry;
+  }
+
+  function computeSpotForRow(r: Row): number | undefined {
+    // Prefer real spot for IF, fallback to any leg's indexPrice or settlement snapshot
     if (ifSpot != null && isFinite(ifSpot)) return ifSpot;
     for (const L of r.legs) {
       const t = tickers[L.leg.symbol] || {};
       if (t?.indexPrice != null && isFinite(Number(t.indexPrice))) return Number(t.indexPrice);
     }
+    if (r.settlements) {
+      for (const info of Object.values(r.settlements)) {
+        const s = Number(info?.settleUnderlying);
+        if (Number.isFinite(s) && s > 0) return s;
+      }
+    }
     return undefined;
-  };
+  }
+
+  function describeExpiry(r: Row) {
+    const now = Date.now();
+    const optionLegs = r.legs.filter(L => !L.hidden && Number(L.leg.expiryMs) > 0);
+    if (!optionLegs.length) return { state: 'active' as const, unsettled: false, expiredExpiries: [] as number[] };
+    let expiredCount = 0;
+    const expiredKeys = new Set<number>();
+    let unsettled = false;
+    for (const L of optionLegs) {
+      const expiryMs = Number(L.leg.expiryMs) || 0;
+      if (expiryMs > 0 && expiryMs <= now) {
+        expiredCount++;
+        expiredKeys.add(expiryMs);
+        if (!settlementForLeg(r, L)) unsettled = true;
+      }
+    }
+    if (!expiredCount) return { state: 'active' as const, unsettled: false, expiredExpiries: [] as number[] };
+    const allExpired = expiredCount === optionLegs.length;
+    return {
+      state: allExpired ? ('expired' as const) : ('partial' as const),
+      unsettled,
+      expiredExpiries: Array.from(expiredKeys).sort(),
+    };
+  }
+
+  function computeLegSnapshot(r: Row, L: PositionLeg) {
+    const ticker = tickers[L.leg.symbol] || {};
+    const qty = Number(L.qty) || 1;
+    const entry = Number(L.entryPrice) || 0;
+    const settlement = settlementForLeg(r, L);
+    const isPerp = !String(L.leg.symbol || '').includes('-');
+    const strike = Number(L.leg.strike) || 0;
+    if (settlement) {
+      const settleS = settlement.settleUnderlying;
+      const price = isPerp ? settleS : (L.leg.optionType === 'C' ? Math.max(0, settleS - strike) : Math.max(0, strike - settleS));
+      const mid = price;
+      const exec = price;
+      const pnl = (L.side === 'short' ? (entry - mid) : (mid - entry)) * qty;
+      return {
+        bid: undefined,
+        ask: undefined,
+        mid,
+        exec,
+        spread: undefined,
+        oi: undefined,
+        pnlMid: pnl,
+        pnlExec: pnl,
+        greeks: { delta: 0, gamma: 0, vega: 0, theta: 0 },
+        settleS,
+        settledAt: settlement.settledAt,
+        settled: true,
+      };
+    }
+
+    const { bid, ask } = bestBidAsk(ticker);
+    const bidNum = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
+    const askNum = ask != null && isFinite(Number(ask)) ? Number(ask) : undefined;
+    const midRaw = midPrice(ticker);
+    const mid = midRaw != null && isFinite(Number(midRaw)) ? Number(midRaw) : 0;
+    let exec = L.side === 'short' ? (askNum ?? mid) : (bidNum ?? mid);
+    if (!(exec != null && isFinite(exec))) exec = mid;
+    const pnlMid = (L.side === 'short' ? (entry - mid) : (mid - entry)) * qty;
+    const pnlExec = (L.side === 'short' ? (entry - exec) : (exec - entry)) * qty;
+    const greeks = {
+      delta: ticker?.delta != null ? Number(ticker.delta) : 0,
+      gamma: ticker?.gamma != null ? Number(ticker.gamma) : 0,
+      vega: ticker?.vega != null ? Number(ticker.vega) : 0,
+      theta: ticker?.theta != null ? Number(ticker.theta) : 0,
+    };
+    const spread = (bidNum != null && askNum != null && bidNum > 0 && askNum > 0) ? Math.max(0, askNum - bidNum) : undefined;
+    const oi = ticker?.openInterest != null ? Number(ticker.openInterest) : undefined;
+    return {
+      bid: bidNum,
+      ask: askNum,
+      mid,
+      exec,
+      spread,
+      oi,
+      pnlMid,
+      pnlExec,
+      greeks,
+      settleS: undefined,
+      settledAt: undefined,
+      settled: false,
+    };
+  }
   const ivPctForLeg = (L: PositionLeg, r: Row): number | undefined => {
+    if (settlementForLeg(r, L)) return undefined;
+    const expiryMs = Number(L.leg.expiryMs) || 0;
+    if (expiryMs > 0 && expiryMs <= Date.now()) return undefined;
     const t = tickers[L.leg.symbol] || {};
     const ivMark = t?.markIv != null ? Number(t.markIv) : undefined;
     if (ivMark != null && isFinite(ivMark)) return ivMark <= 3 ? ivMark * 100 : ivMark;
@@ -617,6 +877,9 @@ export function UnifiedPositionsTable() {
     return (v != null && isFinite(v)) ? Number(v) : undefined;
   };
   const dSigmaForLeg = (L: PositionLeg, r: Row): number | undefined => {
+    if (settlementForLeg(r, L)) return undefined;
+    const expiryMs = Number(L.leg.expiryMs) || 0;
+    if (expiryMs > 0 && expiryMs <= Date.now()) return undefined;
     const t = tickers[L.leg.symbol] || {};
     const S = t?.indexPrice != null ? Number(t.indexPrice) : computeSpotForRow(r);
     const K = Number(L.leg.strike) || 0;
@@ -705,6 +968,9 @@ export function UnifiedPositionsTable() {
     theta?: number;
     oi?: number;
     dSigma?: number;
+    settleS?: number;
+    settledAt?: number;
+    settled?: boolean;
   };
 
   const ensureMaxProfit = (ctx: PositionEvalContext): number | undefined => {
@@ -746,29 +1012,37 @@ export function UnifiedPositionsTable() {
   };
 
   const buildLegMetrics = (L: PositionLeg, r: Row): LegMetrics => {
-    const t = tickers[L.leg.symbol] || {};
-    const { bid, ask } = bestBidAsk(t);
-    const bidNum = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
-    const askNum = ask != null && isFinite(Number(ask)) ? Number(ask) : undefined;
-    const midRaw = midPrice(t);
-    const mid = midRaw != null && isFinite(Number(midRaw)) ? Number(midRaw) : undefined;
+    const snap = computeLegSnapshot(r, L);
     const entryRaw = Number(L.entryPrice);
     const entry = Number.isFinite(entryRaw) ? entryRaw : undefined;
     const qty = Number(L.qty) || 1;
     const sign = L.side === 'short' ? 1 : -1;
-    const exec = (() => {
-      if (L.side === 'short') return askNum ?? mid;
-      return bidNum ?? mid;
-    })();
-    const pnlMid = (entry != null && mid != null && isFinite(mid)) ? sign * (entry - mid) * qty : undefined;
-    const pnlExec = (entry != null && exec != null && isFinite(exec)) ? sign * (entry - exec) * qty : undefined;
-    const delta = t?.delta != null ? (L.side === 'long' ? Number(t.delta) : -Number(t.delta)) : undefined;
-    const vega = t?.vega != null ? (L.side === 'long' ? Number(t.vega) : -Number(t.vega)) : undefined;
-    const theta = t?.theta != null ? (L.side === 'long' ? Number(t.theta) : -Number(t.theta)) : undefined;
-    const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
-    const ivPct = ivPctForLeg(L, r);
-    const dSigma = dSigmaForLeg(L, r);
-    return { bid: bidNum, ask: askNum, mid, exec, entry, pnlMid, pnlExec, delta, vega, theta, oi, ivPct, dSigma };
+    const pnlMid = snap.pnlMid != null ? snap.pnlMid : (entry != null && snap.mid != null ? sign * (entry - snap.mid) * qty : undefined);
+    const pnlExec = snap.pnlExec != null ? snap.pnlExec : (entry != null && snap.exec != null ? sign * (entry - snap.exec) * qty : undefined);
+    const greeks = snap.greeks || { delta: 0, vega: 0, theta: 0 };
+    const delta = greeks.delta != null ? (L.side === 'long' ? greeks.delta : -greeks.delta) : undefined;
+    const vega = greeks.vega != null ? (L.side === 'long' ? greeks.vega : -greeks.vega) : undefined;
+    const theta = greeks.theta != null ? (L.side === 'long' ? greeks.theta : -greeks.theta) : undefined;
+    const ivPct = snap.settled ? undefined : ivPctForLeg(L, r);
+    const dSigma = snap.settled ? undefined : dSigmaForLeg(L, r);
+    return {
+      bid: snap.bid,
+      ask: snap.ask,
+      mid: snap.mid,
+      exec: snap.exec,
+      entry,
+      pnlMid,
+      pnlExec,
+      delta,
+      vega,
+      theta,
+      oi: snap.oi,
+      ivPct,
+      dSigma,
+      settleS: snap.settleS,
+      settledAt: snap.settledAt,
+      settled: snap.settled,
+    };
   };
 
   const metricsForSymbol = (ctx: PositionEvalContext, symbol?: string): LegMetrics | undefined => {
@@ -1020,55 +1294,39 @@ export function UnifiedPositionsTable() {
   }, [rows, slowMode]);
 
   const calc = (r: Row) => {
-    // Per-leg live mid and greeks (ignore hidden legs)
-    const legs = r.legs.filter(L => !L.hidden).map((L) => {
-      const t = tickers[L.leg.symbol] || {};
-      const midRaw = midPrice(t);
-      const mid = midRaw != null && isFinite(Number(midRaw)) ? Number(midRaw) : 0;
-      const greeks = {
-        delta: t?.delta != null ? Number(t.delta) : 0,
-        gamma: t?.gamma != null ? Number(t.gamma) : 0,
-        vega: t?.vega != null ? Number(t.vega) : 0,
-        theta: t?.theta != null ? Number(t.theta) : 0,
-      };
-      const { bid, ask } = bestBidAsk(t);
-      const bidNum = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
-      const askNum = ask != null && isFinite(Number(ask)) ? Number(ask) : undefined;
-      const spread = bidNum != null && askNum != null && bidNum > 0 && askNum > 0 ? Math.max(0, askNum - bidNum) : undefined;
-      const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
-      const entry = Number(L.entryPrice) || 0;
-      const exec = L.side === 'short' ? (askNum ?? mid) : (bidNum ?? mid);
-      const qty = Number(L.qty) || 1;
-      const pnlMid = (L.side === 'short' ? (entry - mid) : (mid - entry)) * qty;
-      const pnlExec = (L.side === 'short' ? (entry - exec) : (exec - entry)) * qty;
-      return { ...L, mid, exec, pnlMid, pnlExec, greeks, bid: bidNum, ask: askNum, spread, oi };
-    });
-    const netEntry = legs.reduce((a, L) => a + (L.side === 'short' ? 1 : -1) * L.entryPrice * L.qty, 0);
-    const netMid = legs.reduce((a, L) => a + (L.side === 'short' ? 1 : -1) * L.mid * L.qty, 0);
-    const netExec = legs.reduce((a, L) => a + (L.side === 'short' ? 1 : -1) * L.exec * L.qty, 0);
+    const legs = r.legs.filter(L => !L.hidden).map((L) => ({
+      ...L,
+      ...computeLegSnapshot(r, L),
+    })) as LegSnapshot[];
+    const netEntry = legs.reduce((acc, L) => acc + (L.side === 'short' ? 1 : -1) * (Number(L.entryPrice) || 0) * (Number(L.qty) || 1), 0);
+    const netMid = legs.reduce((acc, L) => acc + (L.side === 'short' ? 1 : -1) * (Number(L.mid) || 0) * (Number(L.qty) || 1), 0);
+    const netExec = legs.reduce((acc, L) => acc + (L.side === 'short' ? 1 : -1) * (Number(L.exec) || 0) * (Number(L.qty) || 1), 0);
     const pnl = netEntry - netMid;
     const pnlExec = netEntry - netExec;
-    const g = legs.reduce((a, L) => {
-      const s = L.side === 'long' ? 1 : -1;
+    const g = legs.reduce((acc, L) => {
+      const sign = L.side === 'long' ? 1 : -1;
+      const qty = Number(L.qty) || 1;
+      const greeks = L.greeks || { delta: 0, gamma: 0, vega: 0, theta: 0 };
       return {
-        delta: a.delta + s * L.greeks.delta * L.qty,
-        gamma: a.gamma + s * L.greeks.gamma * L.qty,
-        vega: a.vega + s * L.greeks.vega * L.qty,
-        theta: a.theta + s * L.greeks.theta * L.qty,
+        delta: acc.delta + sign * (greeks.delta || 0) * qty,
+        gamma: acc.gamma + sign * (greeks.gamma || 0) * qty,
+        vega: acc.vega + sign * (greeks.vega || 0) * qty,
+        theta: acc.theta + sign * (greeks.theta || 0) * qty,
       };
     }, { delta: 0, gamma: 0, vega: 0, theta: 0 });
-    const spreads = legs.map(L => L.spread).filter((v): v is number => v != null && Number.isFinite(v));
+    const spreadsArr = legs.map(L => L.spread).filter((v): v is number => v != null && Number.isFinite(v));
     const ois = legs.map(L => L.oi).filter((v): v is number => v != null && Number.isFinite(v));
     const spreadPcts = legs
-      .map(L => (L.spread != null && Number.isFinite(L.spread) && L.mid > 0) ? (L.spread / L.mid) * 100 : undefined)
+      .map(L => (L.spread != null && Number.isFinite(L.spread) && (Number(L.mid) || 0) > 0)
+        ? (L.spread / Number(L.mid)) * 100
+        : undefined)
       .filter((v): v is number => v != null && Number.isFinite(v));
     const liq = {
-      maxSpread: spreads.length ? Math.max(...spreads) : undefined,
+      maxSpread: spreadsArr.length ? Math.max(...spreadsArr) : undefined,
       minOI: ois.length ? Math.min(...ois) : undefined,
       maxSpreadPct: spreadPcts.length ? Math.max(...spreadPcts) : undefined,
     } as { maxSpread?: number; minOI?: number; maxSpreadPct?: number };
 
-    // Vertical extras and nearest DTE (works for any position)
     let width: number | undefined;
     let maxLoss: number | undefined;
     let dte: number | undefined;
@@ -1078,7 +1336,7 @@ export function UnifiedPositionsTable() {
       dte = Math.max(0, Math.round((nearest - Date.now()) / (1000 * 60 * 60 * 24)));
     }
     if (r.kind === 'vertical' && expSet.length === 1) {
-      const strikes = legs.map(L => L.leg.strike);
+      const strikes = legs.map(L => Number(L.leg.strike) || 0);
       width = Math.abs(strikes[0] - strikes[1]);
       maxLoss = Math.max(0, (width - (r.cEnter ?? 0)) * (r.qty ?? 1));
     }
@@ -1164,20 +1422,26 @@ export function UnifiedPositionsTable() {
   return (
     <div>
       <h3>My Positions</h3>
-      <div style={{display:'flex', gap: 12, alignItems:'center', marginBottom: 6}}>
+      <div style={{display:'flex', gap: 8, alignItems:'center', marginBottom: 6, flexWrap:'wrap'}}>
         <button className="ghost" onClick={exportCSV}>Export CSV</button>
-        <label style={{display:'flex', gap:6, alignItems:'center'}}>
-          <input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />
-          <span className="muted">Show closed</span>
-        </label>
-        <label style={{display:'flex', gap:6, alignItems:'center'}}>
-          <input type="checkbox" checked={useExecPnl} onChange={(e) => setUseExecPnl(e.target.checked)} />
-          <span className="muted">PNL($) exec</span>
-        </label>
-        <label style={{display:'flex', gap:6, alignItems:'center'}}>
-          <input type="checkbox" checked={slowMode} onChange={(e) => setGlobalSlowMode(e.target.checked)} />
-          <span className="muted">Slow refresh (5 min)</span>
-        </label>
+        <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+          <label style={{display:'flex', gap:4, alignItems:'center', fontSize:'0.85em'}}>
+            <input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />
+            <span className="muted">Show closed</span>
+          </label>
+          <label style={{display:'flex', gap:4, alignItems:'center', fontSize:'0.85em'}}>
+            <input type="checkbox" checked={hideExpired} onChange={(e) => setHideExpired(e.target.checked)} />
+            <span className="muted">Hide expired</span>
+          </label>
+          <label style={{display:'flex', gap:4, alignItems:'center', fontSize:'0.85em'}}>
+            <input type="checkbox" checked={useExecPnl} onChange={(e) => setUseExecPnl(e.target.checked)} />
+            <span className="muted">PNL($) exec</span>
+          </label>
+          <label style={{display:'flex', gap:4, alignItems:'center', fontSize:'0.85em'}}>
+            <input type="checkbox" checked={slowMode} onChange={(e) => setGlobalSlowMode(e.target.checked)} />
+            <span className="muted">Slow refresh (5 min)</span>
+          </label>
+        </div>
         <div style={{display:'flex', gap:6, marginLeft: 'auto'}}>
           <button className={tab==='all' ? 'primary' : 'ghost'} onClick={() => setTab('all')}>All</button>
           <button className={tab==='fav' ? 'primary' : 'ghost'} onClick={() => setTab('fav')}>Favorites</button>
@@ -1262,7 +1526,52 @@ export function UnifiedPositionsTable() {
               {visibleColumns.vega && <th>Vega</th>}
               {visibleColumns.theta && <th>Theta, $/day</th>}
               {visibleColumns.liquidity && <th>Liquidity</th>}
-              {visibleColumns.actions && <th>Actions</th>}
+              {visibleColumns.actions && (
+                <th>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                    <span>Actions</span>
+                    <div ref={actionMenuRef} style={{ position: 'relative' }}>
+                      <button
+                        className="ghost"
+                        title="Configure action buttons"
+                        onClick={() => setActionMenuOpen((open) => !open)}
+                        style={{ padding: '2px 6px', fontSize: '0.9em' }}
+                      >⚙</button>
+                      {actionMenuOpen && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            right: 0,
+                            top: 'calc(100% + 4px)',
+                            background: 'var(--card)',
+                            color: 'var(--fg)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 8,
+                            padding: '10px 12px',
+                            boxShadow: '0 12px 24px rgba(0,0,0,.40)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 6,
+                            minWidth: 160,
+                            zIndex: 45,
+                          }}
+                        >
+                          {(Object.keys(ACTION_LABELS) as ActionKey[]).map((key) => (
+                            <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.95em' }}>
+                              <input
+                                type="checkbox"
+                                checked={actionVisibility[key]}
+                                onChange={() => setActionVisibility((prev) => ({ ...prev, [key]: !prev[key] }))}
+                              />
+                              <span>{ACTION_LABELS[key]}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -1299,11 +1608,12 @@ export function UnifiedPositionsTable() {
               const dte = c.dte != null ? `${c.dte}d` : (expiries.length === 1 ? `${Math.max(0, Math.round((expiries[0]-Date.now())/(86400000)))}d` : '—');
               const typeLabel = strategyName(r.legs);
               const hasNote = typeof r.note === 'string' && r.note.trim().length > 0;
+              const expiryInfo = describeExpiry(r);
               const pnlValue = useExecPnl ? c.pnlExec : c.pnl;
               const pnlColor = pnlValue > 0 ? 'var(--gain)' : (pnlValue < 0 ? 'var(--loss)' : undefined);
               return (
-                <>
-                  <tr key={r.id} style={evalRes.matched ? { background:'rgba(64,64,64,.30)' } : undefined}>
+                <React.Fragment key={r.id}>
+                  <tr style={evalRes.matched ? { background:'rgba(64,64,64,.30)' } : undefined}>
                     {visibleColumns.type && (
                       <td
                         style={r.favorite
@@ -1327,6 +1637,15 @@ export function UnifiedPositionsTable() {
                           )}
                           {r.closedAt && (
                             <span style={{ background: 'rgba(128,128,128,.18)', color: '#7a7a7a', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>closed</span>
+                          )}
+                          {expiryInfo.state === 'partial' && (
+                            <span style={{ background: 'rgba(234,179,8,.18)', color: '#b45309', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>partial exp</span>
+                          )}
+                          {expiryInfo.state === 'expired' && (
+                            <span style={{ background: 'rgba(128,128,128,.25)', color: '#9ca3af', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>expired</span>
+                          )}
+                          {expiryInfo.unsettled && (
+                            <span style={{ background: 'rgba(244,67,54,.18)', color: '#c62828', padding: '1px 6px', borderRadius: 8, fontSize: 'calc(1em - 3px)' }}>unsettled</span>
                           )}
                           {r.legs.some(L => L.hidden) && (() => {
                             const hiddenCount = r.legs.reduce((acc, L) => acc + (L.hidden ? 1 : 0), 0);
@@ -1380,45 +1699,88 @@ export function UnifiedPositionsTable() {
                         })()}
                       </td>
                     )}
-                    {visibleColumns.actions && (
-                      <td>
-                        <div style={{display:'flex', flexDirection:'column', gap:4}}>
-                          <div style={{display:'flex', alignItems:'center', gap:6}}>
-                            <button
-                              className="ghost"
-                              style={{
-                                height: 28,
-                                lineHeight: '28px',
-                                padding: '0 6px',
-                                fontSize: 18,
-                                color: r.favorite ? '#d4b106' : 'var(--fg)',
-                                fontFamily: '"Segoe UI Symbol", "Arial Unicode MS", sans-serif',
-                                transition: 'color 0.15s ease',
-                              }}
-                              title={r.favorite ? 'Unfavorite' : 'Favorite'}
-                              onClick={() => {
-                                if (r.id.startsWith('S:')) toggleFavoriteSpread(r.id.slice(2));
-                                else toggleFavoritePosition(r.id.slice(2));
-                              }}
-                            >{r.favorite ? '★' : '☆'}</button>
-                            <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 6px', fontSize: 28}} title={expanded[r.id] ? 'Hide legs' : 'Show legs'} onClick={() => setExpanded(prev => ({ ...prev, [r.id]: !prev[r.id] }))}>{expanded[r.id] ? '▴' : '▾'}</button>
-                            <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => setView(r)}>View</button>
-                            <button className="ghost" onClick={() => openEditRow(r)} style={{height: 28, lineHeight: '28px', padding: '0 10px'}}>Edit</button>
+                    {visibleColumns.actions && (() => {
+                      const showRow1 = (actionVisibility.favorite || actionVisibility.expand || actionVisibility.view || actionVisibility.edit);
+                      const showRow2 = (
+                        (actionVisibility.if) ||
+                        (actionVisibility.notes) ||
+                        (actionVisibility.settle && expiryInfo.state !== 'active') ||
+                        actionVisibility.close ||
+                        actionVisibility.delete
+                      );
+                      if (!showRow1 && !showRow2) return <td style={{ textAlign: 'center', color: '#888' }}>—</td>;
+                      return (
+                        <td>
+                          <div style={{display:'flex', flexDirection:'column', gap:4}}>
+                            {showRow1 && (
+                              <div style={{display:'flex', alignItems:'center', gap:6}}>
+                                {actionVisibility.favorite && (
+                                  <button
+                                    className="ghost"
+                                    style={{
+                                      height: 28,
+                                      lineHeight: '28px',
+                                      padding: '0 6px',
+                                      fontSize: 18,
+                                      color: r.favorite ? '#d4b106' : 'var(--fg)',
+                                      fontFamily: '"Segoe UI Symbol", "Arial Unicode MS", sans-serif',
+                                      transition: 'color 0.15s ease',
+                                    }}
+                                    title={r.favorite ? 'Unfavorite' : 'Favorite'}
+                                    onClick={() => {
+                                      if (r.id.startsWith('S:')) toggleFavoriteSpread(r.id.slice(2));
+                                      else toggleFavoritePosition(r.id.slice(2));
+                                    }}
+                                  >{r.favorite ? '★' : '☆'}</button>
+                                )}
+                                {actionVisibility.expand && (
+                                  <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 6px', fontSize: 28}} title={expanded[r.id] ? 'Hide legs' : 'Show legs'} onClick={() => setExpanded(prev => ({ ...prev, [r.id]: !prev[r.id] }))}>{expanded[r.id] ? '▴' : '▾'}</button>
+                                )}
+                                {actionVisibility.view && (
+                                  <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => setView(r)}>View</button>
+                                )}
+                                {actionVisibility.edit && (
+                                  <button className="ghost" onClick={() => openEditRow(r)} style={{height: 28, lineHeight: '28px', padding: '0 10px'}}>Edit</button>
+                                )}
+                              </div>
+                            )}
+                            {showRow2 && (
+                              <div style={{display:'flex', alignItems:'center', gap:6}}>
+                                {actionVisibility.if && (
+                                  <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} title="IF" onClick={() => setIfRow(r)}>IF</button>
+                                )}
+                                {actionVisibility.notes && (
+                                  <button
+                                    className="ghost"
+                                    style={{height: 28, lineHeight: '28px', padding: '0 10px'}}
+                                    title="Notes"
+                                    onClick={() => openNotes(r)}
+                                  >📓</button>
+                                )}
+                                {actionVisibility.settle && expiryInfo.state !== 'active' && (
+                                  <button
+                                    className="ghost"
+                                    style={{
+                                      height: 28,
+                                      lineHeight: '28px',
+                                      padding: '0 10px',
+                                      color: expiryInfo.unsettled ? '#c62828' : undefined,
+                                    }}
+                                    onClick={() => setSettleTarget(r)}
+                                  >Settle</button>
+                                )}
+                                {actionVisibility.close && (
+                                  <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Close this item?')) onCloseRow(r); }}>Close</button>
+                                )}
+                                {actionVisibility.delete && (
+                                  <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Delete this item? This cannot be undone.')) onDeleteRow(r); }}>Del</button>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          <div style={{display:'flex', alignItems:'center', gap:6}}>
-                            <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} title="IF" onClick={() => setIfRow(r)}>IF</button>
-                            <button
-                              className="ghost"
-                              style={{height: 28, lineHeight: '28px', padding: '0 10px'}}
-                              title="Notes"
-                              onClick={() => openNotes(r)}
-                            >📓</button>
-                            <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Close this item?')) onCloseRow(r); }}>Close</button>
-                            <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Delete this item? This cannot be undone.')) onDeleteRow(r); }}>Del</button>
-                          </div>
-                        </div>
-                      </td>
-                    )}
+                        </td>
+                      );
+                    })()}
                   </tr>
                   {expanded[r.id] && (
                     <tr>
@@ -1427,18 +1789,31 @@ export function UnifiedPositionsTable() {
                           {r.legs.map((L, i) => {
                             const rule = ifRules[r.id];
                             const matchedLegs = matchedLegsOnly(r, c, rule);
-                            const t = tickers[L.leg.symbol] || {};
-                            const { bid, ask } = bestBidAsk(t);
-                            const mid = midPrice(t);
-                            const iv = t?.markIv != null ? Number(t.markIv) : undefined;
-                            const dRaw = t?.delta != null ? Number(t.delta) : undefined;
-                            const vRaw = t?.vega != null ? Number(t.vega) : undefined;
-                            const thRaw = t?.theta != null ? Number(t.theta) : undefined;
+                            const snap = computeLegSnapshot(r, L);
+                            const bid = snap.bid;
+                            const ask = snap.ask;
+                            const mid = snap.mid;
+                            const entry = Number(L.entryPrice);
+                            const qty = Number(L.qty) || 1;
+                            const pnlMid = snap.pnlMid != null ? snap.pnlMid : (
+                              Number.isFinite(entry) && mid != null && isFinite(mid)
+                                ? (L.side === 'short' ? (entry - mid) : (mid - entry)) * qty
+                                : undefined
+                            );
+                            const exec = snap.exec;
+                            const pnlExec = snap.pnlExec != null ? snap.pnlExec : (
+                              Number.isFinite(entry) && exec != null && isFinite(exec)
+                                ? (L.side === 'short' ? (entry - exec) : (exec - entry)) * qty
+                                : undefined
+                            );
+                            const greeks = snap.greeks || { delta: 0, vega: 0, theta: 0 };
                             const sgn = L.side === 'long' ? 1 : -1;
-                            const d = dRaw != null ? sgn * dRaw : undefined;
-                            const v = vRaw != null ? sgn * vRaw : undefined;
-                            const th = thRaw != null ? sgn * thRaw : undefined;
-                            const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
+                            const deltaEff = greeks.delta != null ? sgn * greeks.delta : undefined;
+                            const vegaEff = greeks.vega != null ? sgn * greeks.vega : undefined;
+                            const thetaEff = greeks.theta != null ? sgn * greeks.theta : undefined;
+                            const ivLive = snap.settled ? undefined : ivPctForLeg(L, r);
+                            const volShift = snap.settled ? undefined : dSigmaForLeg(L, r);
+                            const oi = snap.oi;
                             return (
                               <div
                                 key={L.leg.symbol}
@@ -1505,6 +1880,11 @@ export function UnifiedPositionsTable() {
                                   <div style={{gridColumn:1, gridRow:'2 / span 3', paddingRight:12, display:'flex', alignItems:'center'}}>
                                     <div title={L.leg.symbol} style={{whiteSpace:'normal', overflowWrap:'anywhere', wordBreak:'break-word', fontSize:'1em'}}>{L.leg.symbol}</div>
                                   </div>
+                                  {snap.settled && (
+                                    <div style={{gridColumn:'2 / span 5', gridRow:1, textAlign:'right', color:'#9c9c9c', fontSize:'calc(1em - 3px)'}}>
+                                      Settlement S = {snap.settleS != null ? snap.settleS.toFixed(2) : '—'}{snap.settledAt ? ` · ${new Date(snap.settledAt).toLocaleString()}` : ''}
+                                    </div>
+                                  )}
                                   {/* Row 1: titles (left to right) */}
                                   <div style={{gridColumn:2, gridRow:1}} className="muted">Bid / Ask</div>
                                   <div style={{gridColumn:3, gridRow:1}} className="muted">Mid</div>
@@ -1519,92 +1899,21 @@ export function UnifiedPositionsTable() {
                                   <div style={{gridColumn:6, gridRow:3}} className="muted">Δσ (Vol)</div>
                                   {/* Row 2: values for first line */}
                                   <div style={{gridColumn:2, gridRow:2}}>{bid != null ? bid.toFixed(2) : '—'} / {ask != null ? ask.toFixed(2) : '—'}</div>
-                                  <div style={{gridColumn:3, gridRow:2}}>{mid != null ? mid.toFixed(2) : '—'}</div>
-                                  <div style={{gridColumn:4, gridRow:2}}>{isFinite(L.entryPrice) ? `$${L.entryPrice.toFixed(2)}` : '—'}</div>
+                                  <div style={{gridColumn:3, gridRow:2}}>{mid != null && isFinite(mid) ? Number(mid).toFixed(2) : '—'}</div>
+                                  <div style={{gridColumn:4, gridRow:2}}>{Number.isFinite(entry) ? `$${entry.toFixed(2)}` : '—'}</div>
                                   <div style={{gridColumn:5, gridRow:2}}>{(() => {
-                                    const entry = Number(L.entryPrice);
-                                    if (!Number.isFinite(entry)) return '—';
-                                    const qty = Number(L.qty) || 1;
-                                    const midVal = typeof mid === 'number' && isFinite(mid) ? mid : undefined;
-                                    const bidVal = typeof bid === 'number' && isFinite(bid) ? bid : undefined;
-                                    const askVal = typeof ask === 'number' && isFinite(ask) ? ask : undefined;
-                                    const isShort = L.side === 'short';
-                                    const close = useExecPnl
-                                      ? (isShort ? (askVal ?? midVal) : (bidVal ?? midVal))
-                                      : midVal;
-                                    if (!(close != null && isFinite(close))) return '—';
-                                    const pnl = isShort ? (entry - close) * qty : (close - entry) * qty;
-                                    const color = pnl > 0 ? 'var(--gain)' : (pnl < 0 ? 'var(--loss)' : undefined);
-                                    return <span style={color ? { color } : undefined}>{pnl.toFixed(2)}</span>;
+                                    const pnlVal = useExecPnl ? pnlExec : pnlMid;
+                                    if (!(pnlVal != null && isFinite(pnlVal))) return '—';
+                                    const color = pnlVal > 0 ? 'var(--gain)' : (pnlVal < 0 ? 'var(--loss)' : undefined);
+                                    return <span style={color ? { color } : undefined}>{pnlVal.toFixed(2)}</span>;
                                   })()}</div>
-                                  <div style={{gridColumn:6, gridRow:2}}>{(() => {
-                                    const rawMarkIv = t?.markIv != null ? Number(t.markIv) : (iv != null ? Number(iv) : undefined);
-                                    if (rawMarkIv != null && isFinite(rawMarkIv)) {
-                                      const pct = rawMarkIv <= 3 ? rawMarkIv * 100 : rawMarkIv;
-                                      return pct.toFixed(1);
-                                    }
-                                    const spotAny = (() => { for (const LL of r.legs) { const tt = tickers[LL.leg.symbol] || {}; if (tt?.indexPrice != null && isFinite(Number(tt.indexPrice))) return Number(tt.indexPrice); } return undefined; })();
-                                    const S = t?.indexPrice != null ? Number(t.indexPrice) : spotAny;
-                                    const K = Number(L.leg.strike) || 0;
-                                    const T = Math.max(0, (Number(L.leg.expiryMs) - Date.now()) / (365 * 24 * 60 * 60 * 1000));
-                                    const markPrice = t?.markPrice != null ? Number(t.markPrice) : undefined;
-                                    if (S != null && isFinite(S) && K > 0 && T > 0 && markPrice != null && isFinite(markPrice) && markPrice >= 0) {
-                                      const iv = bsImpliedVol(L.leg.optionType, S, K, T, markPrice, rPct / 100);
-                                      if (iv != null && isFinite(iv)) return (iv * 100).toFixed(1);
-                                    }
-                                    let ivFromBook: number | undefined;
-                                    if (S != null && isFinite(S) && K > 0 && T > 0) {
-                                      const { bid, ask } = bestBidAsk(t);
-                                      const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
-                                      const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
-                                      if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) ivFromBook = 0.5 * (ivBid + ivAsk);
-                                      else if (ivBid != null && isFinite(ivBid)) ivFromBook = ivBid;
-                                      else if (ivAsk != null && isFinite(ivAsk)) ivFromBook = ivAsk;
-                                    }
-                                    if (ivFromBook != null && isFinite(ivFromBook)) return (ivFromBook * 100).toFixed(1);
-                                    const S2 = t?.indexPrice != null ? Number(t.indexPrice) : spotAny;
-                                    const mid2 = mid != null ? Number(mid) : undefined;
-                                    if (S2 != null && isFinite(S2) && K > 0 && T > 0 && mid2 != null && isFinite(mid2) && mid2 >= 0) {
-                                      const iv = bsImpliedVol(L.leg.optionType, S2, K, T, mid2, rPct / 100);
-                                      if (iv != null && isFinite(iv)) return (iv * 100).toFixed(1);
-                                    }
-                                    const v = hvLatest;
-                                    return v != null && isFinite(v) ? Number(v).toFixed(1) : '—';
-                                  })()}</div>
+                                  <div style={{gridColumn:6, gridRow:2}}>{ivLive != null ? ivLive.toFixed(1) : '—'}</div>
                                   {/* Row 4: values for second line */}
-                                  <div style={{gridColumn:2, gridRow:4}}>{v != null ? v.toFixed(3) : '—'}</div>
-                                  <div style={{gridColumn:3, gridRow:4}}>{d != null ? d.toFixed(3) : '—'}</div>
-                                  <div style={{gridColumn:4, gridRow:4}}>{th != null ? th.toFixed(3) : '—'}</div>
+                                  <div style={{gridColumn:2, gridRow:4}}>{vegaEff != null ? vegaEff.toFixed(3) : '—'}</div>
+                                  <div style={{gridColumn:3, gridRow:4}}>{deltaEff != null ? deltaEff.toFixed(3) : '—'}</div>
+                                  <div style={{gridColumn:4, gridRow:4}}>{thetaEff != null ? thetaEff.toFixed(3) : '—'}</div>
                                   <div style={{gridColumn:5, gridRow:4}}>{oi != null ? oi : '—'}</div>
-                                  <div style={{gridColumn:6, gridRow:4}}>{(() => {
-                                    const spotAny2 = (() => { for (const LL of r.legs) { const tt = tickers[LL.leg.symbol] || {}; if (tt?.indexPrice != null && isFinite(Number(tt.indexPrice))) return Number(tt.indexPrice); } return undefined; })();
-                                    const S = t?.indexPrice != null ? Number(t.indexPrice) : spotAny2;
-                                    const K = Number(L.leg.strike) || 0;
-                                    const T = Math.max(0, (Number(L.leg.expiryMs) - Date.now()) / (365 * 24 * 60 * 60 * 1000));
-                                    if (!(S != null && isFinite(S) && K > 0 && T > 0)) return '—';
-                                    const mid3 = mid != null ? Number(mid) : undefined;
-                                    const ivMid = (mid3 != null && isFinite(mid3) && mid3 >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, mid3, rPct / 100) : undefined;
-                                    const rawMarkIvPct = t?.markIv != null ? Number(t.markIv) : undefined;
-                                    const markIvPct = (rawMarkIvPct != null && isFinite(rawMarkIvPct)) ? (rawMarkIvPct <= 3 ? rawMarkIvPct * 100 : rawMarkIvPct) : undefined;
-                                    const sigmaFromMarkIv = (markIvPct != null && isFinite(markIvPct)) ? (markIvPct / 100) : undefined;
-                                    const markPrice = t?.markPrice != null ? Number(t.markPrice) : undefined;
-                                    const sigmaFromMarkPrice = (markPrice != null && isFinite(markPrice) && markPrice >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, markPrice, rPct / 100) : undefined;
-                                    let sigmaFromBook: number | undefined;
-                                    {
-                                      const { bid, ask } = bestBidAsk(t);
-                                      const ivBid = (bid != null && isFinite(bid) && bid >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, bid, rPct / 100) : undefined;
-                                      const ivAsk = (ask != null && isFinite(ask) && ask >= 0) ? bsImpliedVol(L.leg.optionType, S, K, T, ask, rPct / 100) : undefined;
-                                      if (ivBid != null && isFinite(ivBid) && ivAsk != null && isFinite(ivAsk)) sigmaFromBook = 0.5 * (ivBid + ivAsk);
-                                      else if (ivBid != null && isFinite(ivBid)) sigmaFromBook = ivBid;
-                                      else if (ivAsk != null && isFinite(ivAsk)) sigmaFromBook = ivAsk;
-                                    }
-                                    const sigmaFromHV = (hvLatest != null && isFinite(hvLatest)) ? (Number(hvLatest) / 100) : undefined;
-                                    const sigmaRef = sigmaFromMarkIv ?? sigmaFromMarkPrice ?? sigmaFromBook ?? sigmaFromHV;
-                                    if (!(ivMid != null && isFinite(ivMid) && sigmaRef != null && isFinite(sigmaRef))) return '—';
-                                    const dSigmaPp = (ivMid - sigmaRef) * 100;
-                                    const badge = dSigmaPp >= 1 ? '↑' : (dSigmaPp <= -1 ? '↓' : '–');
-                                    return `${dSigmaPp.toFixed(1)} [${badge}]`;
-                                  })()}</div>
+                                  <div style={{gridColumn:6, gridRow:4}}>{volShift != null ? `${volShift.toFixed(1)} [${volShift >= 1 ? '↑' : (volShift <= -1 ? '↓' : '–')}]` : '—'}</div>
                                 </div>
                               </div>
                             );
@@ -1613,7 +1922,7 @@ export function UnifiedPositionsTable() {
                       </td>
                     </tr>
                   )}
-                </>
+                </React.Fragment>
               );
               });
             })()}
@@ -1672,7 +1981,12 @@ export function UnifiedPositionsTable() {
                   // Load the new position from store into the open modal
                   const pos = useStore.getState().positions.find(p => p.id === latest);
                   if (pos) {
-                    setView({ id: 'P:' + pos.id, kind: 'multi', legs: pos.legs, createdAt: pos.createdAt, closedAt: pos.closedAt, note: pos.note, favorite: pos.favorite });
+                    const legTimes = (pos.legs ?? [])
+                      .map((leg) => Number((leg as any)?.createdAt))
+                      .filter((v) => Number.isFinite(v));
+                    const baseCreated = Number.isFinite(pos.createdAt) ? Number(pos.createdAt) : Date.now();
+                    const viewCreatedAt = legTimes.length ? Math.min(baseCreated, ...legTimes) : baseCreated;
+                    setView({ id: 'P:' + pos.id, kind: 'multi', legs: pos.legs, createdAt: viewCreatedAt, closedAt: pos.closedAt, note: pos.note, favorite: pos.favorite });
                   }
                 }
               } catch {}
@@ -1713,6 +2027,36 @@ export function UnifiedPositionsTable() {
           </div>
         </div>
       )}
+      {settleTarget && (() => {
+        const expiryInfo = describeExpiry(settleTarget);
+        const spotSuggestion = computeSpotForRow(settleTarget);
+        const legSnapshots = settleTarget.legs.map((leg) => ({
+          ...leg,
+          ...computeLegSnapshot(settleTarget, leg),
+        })) as LegSnapshot[];
+        return (
+          <SettleExpiredModal
+            key={`settle-${settleTarget.id}`}
+            row={settleTarget}
+            positionLabel={strategyName(settleTarget.legs)}
+            legsSnapshot={legSnapshots}
+            expiredExpiries={expiryInfo.expiredExpiries}
+            settlements={settleTarget.settlements}
+            tickers={tickers}
+            spotSuggestion={spotSuggestion}
+            onClose={() => setSettleTarget(null)}
+            onApply={(entries) => {
+              const isSpread = settleTarget.id.startsWith('S:');
+              const rawId = settleTarget.id.slice(2);
+              entries.forEach(({ expiryMs, value }) => {
+                if (isSpread) setSpreadSettlement(rawId, expiryMs, value);
+                else setPositionSettlement(rawId, expiryMs, value);
+              });
+              setSettleTarget(null);
+            }}
+          />
+        );
+      })()}
       {ifRow && (
         <IfModal
           key={ifRow.id}
@@ -1740,6 +2084,195 @@ export function UnifiedPositionsTable() {
         />
       )}
       {editId && <EditPositionModal id={editId} onClose={() => setEditId(null)} />}
+    </div>
+  );
+}
+
+type SettleExpiredModalProps = {
+  row: Row;
+  positionLabel: string;
+  legsSnapshot: LegSnapshot[];
+  expiredExpiries: number[];
+  settlements?: SettlementMap;
+  tickers: Record<string, any>;
+  spotSuggestion?: number;
+  onClose: () => void;
+  onApply: (entries: Array<{ expiryMs: number; value?: number }>) => void;
+};
+
+function SettleExpiredModal({ row, positionLabel, legsSnapshot, expiredExpiries, settlements, tickers, spotSuggestion, onClose, onApply }: SettleExpiredModalProps) {
+  const [draft, setDraft] = React.useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    expiredExpiries.forEach((expiry) => {
+      const key = String(expiry);
+      const existing = settlements?.[key]?.settleUnderlying;
+      initial[key] = existing != null && isFinite(existing) ? existing.toString() : '';
+    });
+    return initial;
+  });
+  const [autoPrices, setAutoPrices] = React.useState<Record<string, number | undefined>>({});
+
+  React.useEffect(() => {
+    const next: Record<string, string> = {};
+    expiredExpiries.forEach((expiry) => {
+      const key = String(expiry);
+      const existing = settlements?.[key]?.settleUnderlying;
+      next[key] = existing != null && isFinite(existing) ? existing.toString() : '';
+    });
+    setDraft(next);
+    setAutoPrices({});
+  }, [row.id, settlements, expiredExpiries.join('|')]);
+
+  React.useEffect(() => {
+    let mounted = true;
+    const fetchPrices = async () => {
+      for (const expiry of expiredExpiries) {
+        const key = String(expiry);
+        const legs = legsSnapshot.filter((leg) => Number(leg.leg.expiryMs) === expiry);
+        const leg = legs.find((item) => String(item.leg.symbol || '').includes('-'));
+        if (!leg) continue;
+        try {
+          const price = await fetchOptionDeliveryPrice(leg.leg.symbol);
+          if (!mounted) return;
+          if (!(price != null && isFinite(price) && price > 0)) continue;
+          setAutoPrices((prev) => ({ ...prev, [key]: price }));
+          setDraft((prev) => {
+            const current = prev[key];
+            if (current && current.trim().length) return prev;
+            return { ...prev, [key]: price.toFixed(2) };
+          });
+        } catch {
+          if (!mounted) return;
+        }
+      }
+    };
+    void fetchPrices();
+    return () => {
+      mounted = false;
+    };
+  }, [row.id, expiredExpiries.join('|'), legsSnapshot]);
+
+  const suggestionsMap = React.useMemo(() => {
+    const map: Record<string, number[]> = {};
+    expiredExpiries.forEach((expiry) => {
+      const values = new Set<number>();
+      if (spotSuggestion != null && isFinite(spotSuggestion) && spotSuggestion > 0) values.add(Number(spotSuggestion));
+      legsSnapshot
+        .filter((leg) => Number(leg.leg.expiryMs) === expiry)
+        .forEach((leg) => {
+          const settleUnderlying = Number(leg.settleS);
+          if (Number.isFinite(settleUnderlying) && settleUnderlying > 0) values.add(settleUnderlying);
+          const ticker = tickers[leg.leg.symbol] || {};
+          const idx = Number(ticker?.indexPrice);
+          if (Number.isFinite(idx) && idx > 0) values.add(idx);
+        });
+      const auto = autoPrices[String(expiry)];
+      if (auto != null && isFinite(auto) && auto > 0) values.add(auto);
+      const arr = Array.from(values).sort((a, b) => a - b);
+      map[String(expiry)] = arr;
+    });
+    return map;
+  }, [expiredExpiries, legsSnapshot, tickers, spotSuggestion, row.id, autoPrices]);
+
+  const handleApply = () => {
+    const updates: Array<{ expiryMs: number; value?: number }> = [];
+    expiredExpiries.forEach((expiry) => {
+      const key = String(expiry);
+      const raw = (draft[key] ?? '').trim();
+      const existing = settlements?.[key]?.settleUnderlying;
+      if (raw.length) {
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          if (!(existing != null && Math.abs(existing - parsed) < 1e-6)) updates.push({ expiryMs: expiry, value: parsed });
+        }
+      } else if (existing != null) {
+        updates.push({ expiryMs: expiry, value: undefined });
+      }
+    });
+    onApply(updates);
+  };
+
+  const formatDate = (ms: number) => {
+    try { return new Date(ms).toISOString().slice(0, 10); } catch { return String(ms); }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, overflowY: 'auto' }}>
+      <div style={{ background: 'var(--card)', color: 'var(--fg)', border: '1px solid var(--border)', borderRadius: 12, width: 520, maxWidth: '95%', maxHeight: '90vh', boxShadow: '0 12px 24px rgba(0,0,0,.4)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 18px', borderBottom: '1px solid var(--border)' }}>
+          <strong>Settle expired · {positionLabel}</strong>
+          <button className="ghost" onClick={onClose}>Close</button>
+        </div>
+        <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {expiredExpiries.length === 0 ? (
+            <div className="muted">Нет истекших ног для фиксации. Возможно, все уже в порядке.</div>
+          ) : (
+            expiredExpiries.map((expiry) => {
+              const key = String(expiry);
+              const legs = legsSnapshot.filter((leg) => Number(leg.leg.expiryMs) === expiry);
+              const existing = settlements?.[key]?.settleUnderlying;
+              const suggestionButtons = suggestionsMap[key] ?? [];
+              return (
+                <div key={key} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <strong>{formatDate(expiry)}</strong>
+                      {existing != null && isFinite(existing) && (
+                        <span className="muted">Текущий settlement: {existing.toFixed(2)}</span>
+                      )}
+                    </div>
+                    <div className="muted" style={{ fontSize: 'calc(1em - 2px)' }}>
+                      {legs.map((leg, idx) => {
+                        const settledLabel = leg.settled && leg.settleS != null ? ` · S=${leg.settleS.toFixed(2)}` : '';
+                        return (
+                          <span key={leg.leg.symbol + idx} style={{ marginRight: 12 }}>
+                            {leg.side} {leg.leg.optionType}{leg.leg.strike} × {leg.qty}{settledLabel}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={draft[key] ?? ''}
+                      onChange={(e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }))}
+                      placeholder="Укажите цену базового актива"
+                      style={{ flex: 1, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--fg)' }}
+                    />
+                    <button type="button" className="ghost" onClick={() => setDraft((prev) => ({ ...prev, [key]: '' }))}>Clear</button>
+                  </div>
+                  {suggestionButtons.length > 0 && (
+                    <div className="muted" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      <span style={{ marginRight: 4 }}>Подсказки:</span>
+                      {suggestionButtons.slice(0, 4).map((val, idx) => (
+                        <button
+                          key={`${key}-${idx}-${val}`}
+                          type="button"
+                          className="ghost"
+                          style={{ padding: '2px 8px' }}
+                          onClick={() => setDraft((prev) => ({ ...prev, [key]: val.toFixed(2) }))}
+                        >
+                          {val.toFixed(2)}
+                          {(autoPrices[key] != null && Math.abs(val - (autoPrices[key] as number)) < 1e-6) ? ' (Bybit)' : ''}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="muted" style={{ fontSize: 'calc(1em - 3px)' }}>Оставьте поле пустым, чтобы очистить сохранённый settlement.</div>
+                </div>
+              );
+            })
+          )}
+          {/* Автозакрытие выполняется системой; дополнительный чекбокс больше не нужен */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+            <button className="ghost" onClick={onClose}>Cancel</button>
+            <button className="primary" onClick={handleApply} disabled={expiredExpiries.length === 0}>Apply</button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

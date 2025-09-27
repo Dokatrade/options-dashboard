@@ -1,0 +1,459 @@
+Download the React DevTools for a better development experience: https://reactjs.org/link/react-devtools
+UnifiedPositionsTable.tsx:1449 Warning: Each child in a list should have a unique "key" prop.
+
+Check the render method of `UnifiedPositionsTable`. See https://reactjs.org/link/warning-keys for more information.
+    at UnifiedPositionsTable (http://localhost:5173/src/components/UnifiedPositionsTable.tsx?t=1758890815514:99:19)
+    at div
+    at div
+    at div
+    at SlowModeProvider (http://localhost:5173/src/contexts/SlowModeContext.tsx:22:36)
+    at App (http://localhost:5173/src/App.tsx?t=1758890815514:27:33)
+printWarning @ react_jsx-dev-runtime.js?v=0ad47090:64
+error @ react_jsx-dev-runtime.js?v=0ad47090:48
+validateExplicitKey @ react_jsx-dev-runtime.js?v=0ad47090:724
+validateChildKeys @ react_jsx-dev-runtime.js?v=0ad47090:737
+jsxWithValidation @ react_jsx-dev-runtime.js?v=0ad47090:855
+UnifiedPositionsTable @ UnifiedPositionsTable.tsx:1449
+renderWithHooks @ chunk-TYILIMWK.js?v=0ad47090:11548
+mountIndeterminateComponent @ chunk-TYILIMWK.js?v=0ad47090:14926
+beginWork @ chunk-TYILIMWK.js?v=0ad47090:15914
+beginWork$1 @ chunk-TYILIMWK.js?v=0ad47090:19753
+performUnitOfWork @ chunk-TYILIMWK.js?v=0ad47090:19198
+workLoopSync @ chunk-TYILIMWK.js?v=0ad47090:19137
+renderRootSync @ chunk-TYILIMWK.js?v=0ad47090:19116
+performConcurrentWorkOnRoot @ chunk-TYILIMWK.js?v=0ad47090:18678
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875  GET http://localhost:5173/bybit/v5/market/option/delivery-price?category=option&symbol=ETH-26SEP25-4300-P-USDT&settleCoin=USDT 404 (Not Found)
+fetchCallImpl @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875
+fetch @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3881
+(anonymous) @ frame_ant.js:2
+getJson @ bybit.ts:6
+getDeliveryPriceDirect @ bybit.ts:146
+fetchOptionDeliveryPrice @ bybit.ts:184
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+bybit.ts:190 [delivery-price] symbol request failed ETH-26SEP25-4300-P-USDT Error: HTTP 404
+    at getJson (bybit.ts:7:22)
+    at async getDeliveryPriceDirect (bybit.ts:146:16)
+    at async fetchOptionDeliveryPrice (bybit.ts:184:20)
+    at async UnifiedPositionsTable.tsx:453:27
+    at async Promise.allSettled (:5173/index 0)
+    at async UnifiedPositionsTable.tsx:464:13
+fetchOptionDeliveryPrice @ bybit.ts:190
+await in fetchOptionDeliveryPrice
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875  GET http://localhost:5173/bybit/v5/market/option/delivery-price?category=option&symbol=ETH-26SEP25-4000-P-USDT&settleCoin=USDT 404 (Not Found)
+fetchCallImpl @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875
+fetch @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3881
+(anonymous) @ frame_ant.js:2
+getJson @ bybit.ts:6
+getDeliveryPriceDirect @ bybit.ts:146
+fetchOptionDeliveryPrice @ bybit.ts:184
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+bybit.ts:190 [delivery-price] symbol request failed ETH-26SEP25-4000-P-USDT Error: HTTP 404
+    at getJson (bybit.ts:7:22)
+    at async getDeliveryPriceDirect (bybit.ts:146:16)
+    at async fetchOptionDeliveryPrice (bybit.ts:184:20)
+    at async UnifiedPositionsTable.tsx:453:27
+    at async Promise.allSettled (:5173/index 0)
+    at async UnifiedPositionsTable.tsx:464:13
+fetchOptionDeliveryPrice @ bybit.ts:190
+await in fetchOptionDeliveryPrice
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875  GET http://localhost:5173/bybit/v5/market/option/delivery-price?category=option&symbol=ETH-26SEP25-3700-P-USDT&settleCoin=USDT net::ERR_ABORTED 404 (Not Found)
+fetchCallImpl @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875
+fetch @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3881
+(anonymous) @ frame_ant.js:2
+getJson @ bybit.ts:6
+getDeliveryPriceDirect @ bybit.ts:146
+fetchOptionDeliveryPrice @ bybit.ts:184
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+bybit.ts:190 [delivery-price] symbol request failed ETH-26SEP25-3700-P-USDT Error: HTTP 404
+    at getJson (bybit.ts:7:22)
+    at async getDeliveryPriceDirect (bybit.ts:146:16)
+    at async fetchOptionDeliveryPrice (bybit.ts:184:20)
+    at async UnifiedPositionsTable.tsx:453:27
+    at async Promise.allSettled (:5173/index 2)
+    at async UnifiedPositionsTable.tsx:464:13
+fetchOptionDeliveryPrice @ bybit.ts:190
+await in fetchOptionDeliveryPrice
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875  GET http://localhost:5173/bybit/v5/market/option/delivery-price?category=option&symbol=ETH-26SEP25-3600-P-USDT&settleCoin=USDT net::ERR_ABORTED 404 (Not Found)
+fetchCallImpl @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875
+fetch @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3881
+(anonymous) @ frame_ant.js:2
+getJson @ bybit.ts:6
+getDeliveryPriceDirect @ bybit.ts:146
+fetchOptionDeliveryPrice @ bybit.ts:184
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+bybit.ts:190 [delivery-price] symbol request failed ETH-26SEP25-3600-P-USDT Error: HTTP 404
+    at getJson (bybit.ts:7:22)
+    at async getDeliveryPriceDirect (bybit.ts:146:16)
+    at async fetchOptionDeliveryPrice (bybit.ts:184:20)
+    at async UnifiedPositionsTable.tsx:453:27
+    at async Promise.allSettled (:5173/index 3)
+    at async UnifiedPositionsTable.tsx:464:13
+fetchOptionDeliveryPrice @ bybit.ts:190
+await in fetchOptionDeliveryPrice
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875  GET http://localhost:5173/bybit/v5/market/option/delivery-history?category=option&baseCoin=ETH&settleCoin=USDT&limit=200 net::ERR_ABORTED 404 (Not Found)
+fetchCallImpl @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875
+fetch @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3881
+(anonymous) @ frame_ant.js:2
+getJson @ bybit.ts:6
+getDeliveryHistory @ bybit.ts:168
+fetchOptionDeliveryPrice @ bybit.ts:195
+await in fetchOptionDeliveryPrice
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875  GET http://localhost:5173/bybit/v5/market/option/delivery-price?category=option&symbol=ETH-26SEP25-4000-P-USDT&settleCoin=USDT 404 (Not Found)
+fetchCallImpl @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875
+fetch @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3881
+(anonymous) @ frame_ant.js:2
+getJson @ bybit.ts:6
+getDeliveryPriceDirect @ bybit.ts:146
+fetchOptionDeliveryPrice @ bybit.ts:184
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+bybit.ts:190 [delivery-price] symbol request failed ETH-26SEP25-4000-P-USDT Error: HTTP 404
+    at getJson (bybit.ts:7:22)
+    at async getDeliveryPriceDirect (bybit.ts:146:16)
+    at async fetchOptionDeliveryPrice (bybit.ts:184:20)
+    at async UnifiedPositionsTable.tsx:453:27
+    at async Promise.allSettled (:5173/index 1)
+    at async UnifiedPositionsTable.tsx:464:13
+fetchOptionDeliveryPrice @ bybit.ts:190
+await in fetchOptionDeliveryPrice
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875  GET http://localhost:5173/bybit/v5/market/option/delivery-history?category=option&baseCoin=ETH&settleCoin=USDT&limit=200 404 (Not Found)
+fetchCallImpl @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875
+fetch @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3881
+(anonymous) @ frame_ant.js:2
+getJson @ bybit.ts:6
+getDeliveryHistory @ bybit.ts:168
+fetchOptionDeliveryPrice @ bybit.ts:195
+await in fetchOptionDeliveryPrice
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875  GET http://localhost:5173/bybit/v5/market/option/delivery-price?category=option&symbol=ETH-26SEP25-4000-P-USDT&settleCoin=USDT 404 (Not Found)
+fetchCallImpl @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875
+fetch @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3881
+(anonymous) @ frame_ant.js:2
+getJson @ bybit.ts:6
+getDeliveryPriceDirect @ bybit.ts:146
+fetchOptionDeliveryPrice @ bybit.ts:184
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+bybit.ts:190 [delivery-price] symbol request failed ETH-26SEP25-4000-P-USDT Error: HTTP 404
+    at getJson (bybit.ts:7:22)
+    at async getDeliveryPriceDirect (bybit.ts:146:16)
+    at async fetchOptionDeliveryPrice (bybit.ts:184:20)
+    at async UnifiedPositionsTable.tsx:453:27
+    at async Promise.allSettled (:5173/index 4)
+    at async UnifiedPositionsTable.tsx:464:13
+fetchOptionDeliveryPrice @ bybit.ts:190
+await in fetchOptionDeliveryPrice
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875  GET http://localhost:5173/bybit/v5/market/option/delivery-history?category=option&baseCoin=ETH&settleCoin=USDT&limit=200 404 (Not Found)
+fetchCallImpl @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875
+fetch @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3881
+(anonymous) @ frame_ant.js:2
+getJson @ bybit.ts:6
+getDeliveryHistory @ bybit.ts:168
+fetchOptionDeliveryPrice @ bybit.ts:195
+await in fetchOptionDeliveryPrice
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875  GET http://localhost:5173/bybit/v5/market/option/delivery-history?category=option&baseCoin=ETH&settleCoin=USDT&limit=200 404 (Not Found)
+fetchCallImpl @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875
+fetch @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3881
+(anonymous) @ frame_ant.js:2
+getJson @ bybit.ts:6
+getDeliveryHistory @ bybit.ts:168
+fetchOptionDeliveryPrice @ bybit.ts:195
+await in fetchOptionDeliveryPrice
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875  GET http://localhost:5173/bybit/v5/market/option/delivery-history?category=option&baseCoin=ETH&settleCoin=USDT&limit=200 404 (Not Found)
+fetchCallImpl @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875
+fetch @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3881
+(anonymous) @ frame_ant.js:2
+getJson @ bybit.ts:6
+getDeliveryHistory @ bybit.ts:168
+fetchOptionDeliveryPrice @ bybit.ts:195
+await in fetchOptionDeliveryPrice
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384
+main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875  GET http://localhost:5173/bybit/v5/market/option/delivery-history?category=option&baseCoin=ETH&settleCoin=USDT&limit=200 404 (Not Found)
+fetchCallImpl @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3875
+fetch @ main.js?attr=KzOUZH53Nti8-dvvabwfq3JFHEkhVVbkDAohfdMbLQR1v5WvS1sUyUdSDJ9vNzLn:3881
+(anonymous) @ frame_ant.js:2
+getJson @ bybit.ts:6
+getDeliveryHistory @ bybit.ts:168
+fetchOptionDeliveryPrice @ bybit.ts:195
+await in fetchOptionDeliveryPrice
+(anonymous) @ UnifiedPositionsTable.tsx:453
+(anonymous) @ UnifiedPositionsTable.tsx:460
+(anonymous) @ UnifiedPositionsTable.tsx:446
+(anonymous) @ UnifiedPositionsTable.tsx:432
+(anonymous) @ UnifiedPositionsTable.tsx:470
+commitHookEffectListMount @ chunk-TYILIMWK.js?v=0ad47090:16915
+commitPassiveMountOnFiber @ chunk-TYILIMWK.js?v=0ad47090:18156
+commitPassiveMountEffects_complete @ chunk-TYILIMWK.js?v=0ad47090:18129
+commitPassiveMountEffects_begin @ chunk-TYILIMWK.js?v=0ad47090:18119
+commitPassiveMountEffects @ chunk-TYILIMWK.js?v=0ad47090:18109
+flushPassiveEffectsImpl @ chunk-TYILIMWK.js?v=0ad47090:19490
+flushPassiveEffects @ chunk-TYILIMWK.js?v=0ad47090:19447
+(anonymous) @ chunk-TYILIMWK.js?v=0ad47090:19328
+workLoop @ chunk-TYILIMWK.js?v=0ad47090:197
+flushWork @ chunk-TYILIMWK.js?v=0ad47090:176
+performWorkUntilDeadline @ chunk-TYILIMWK.js?v=0ad47090:384

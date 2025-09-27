@@ -28,6 +28,13 @@ type Props = {
 };
 
 export function PositionView({ legs, createdAt, note, title, onClose, onToggleLegHidden, hiddenSymbols, onEdit, onDeleteLeg }: Props) {
+  const positionCreatedAt = React.useMemo(() => {
+    const fallback = Number.isFinite(createdAt) ? Number(createdAt) : Date.now();
+    const legTimes = legs
+      .map((leg) => Number((leg as any)?.createdAt))
+      .filter((v) => Number.isFinite(v));
+    return legTimes.length ? Math.min(...legTimes) : fallback;
+  }, [createdAt, legs]);
   const legsCalc = React.useMemo(() => {
     const hiddenSet = new Set(hiddenSymbols || []);
     return legs.filter(L => !hiddenSet.has(L.leg.symbol));
@@ -120,11 +127,11 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
     const expiries = legsCalc.map(L => Number(L.leg.expiryMs)).filter(Boolean);
     if (!expiries.length) return 0;
     const latest = Math.max(...expiries);
-    const start = Math.min(createdAt || Date.now(), latest);
+    const start = Math.min(positionCreatedAt || Date.now(), latest);
     const total = Math.max(1, latest - start);
     const elapsed = Math.max(0, Math.min(Date.now() - start, total));
     return Math.max(0, Math.min(1, elapsed / total));
-  }, [legsCalc, createdAt, clock]);
+  }, [legsCalc, positionCreatedAt, clock]);
 
   // Zero-DTE flag (calendar day of expiry): snap slider to the end
   const isZeroDTE = React.useMemo(() => {
@@ -335,18 +342,25 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
     const fallbackIvRaw = hv30 != null ? Number(hv30) : 60;
     const fallbackIv = isFinite(fallbackIvRaw) ? fallbackIvRaw : 60;
     const markIvRaw = t?.markIv != null ? Number(t.markIv) : undefined;
-    const baseIvPct = markIvRaw != null && isFinite(markIvRaw) ? markIvRaw : fallbackIv;
+    const markIvPct = markIvRaw != null && isFinite(markIvRaw)
+      ? (Math.abs(markIvRaw) <= 3 ? markIvRaw * 100 : markIvRaw)
+      : undefined;
+    const baseIvPct = markIvPct != null ? markIvPct : fallbackIv;
+    const timeFrac = (() => {
+      if (effTimePos <= minTimePos) return 0;
+      const span = Math.max(1e-9, 1 - minTimePos);
+      return Math.max(0, Math.min(1, (effTimePos - minTimePos) / span));
+    })();
     const expiryMs = Number(leg.leg.expiryMs) || 0;
     const K = Math.max(Number(leg.leg.strike) || 0, 1e-8);
     const intrinsic = leg.leg.optionType === 'C' ? Math.max(0, S - K) : Math.max(0, K - S);
     if (!(expiryMs > nowMs)) return intrinsic;
     const Tfull = Math.max(0, (expiryMs - nowMs) / YEAR_MS);
-    const timeFrac = Math.min(1, Math.max(0, effTimePos));
     const T = Math.max(0, Tfull * (1 - timeFrac));
     if (T <= 1e-8) return intrinsic;
     const sigma = Math.max(0.0001, (baseIvPct / 100) * (1 + ivShift));
     return bsPrice(leg.leg.optionType, Math.max(S, 1e-8), K, T, sigma, rPct / 100);
-  }, [tickers, hv30, effTimePos, ivShift, rPct]);
+  }, [tickers, hv30, effTimePos, minTimePos, ivShift, rPct]);
 
   // Expiry PnL extrema (max profit/loss). Uses expiry payoff across S in {0, strikes, large S} with unbounded detection on S→∞.
   const extrema = React.useMemo(() => {
@@ -475,8 +489,9 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
     const anchorWeight = (() => {
       if (effTimePos <= minTimePos) return 1;
       const denom = Math.max(1e-9, 1 - minTimePos);
-      const futureProgress = Math.min(1, (effTimePos - minTimePos) / denom);
-      return 1 - futureProgress;
+      const progress = Math.max(0, (effTimePos - minTimePos) / denom);
+      if (progress >= 0.05) return 0;
+      return 1 - (progress / 0.05);
     })();
     const expVals = xs.map(S => valueAt(S));
     // Compute T+0 raw values separately; Y-scaling will prioritize expiry structure for clarity
@@ -683,7 +698,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                 if (!expiries.length) return 'DTE: —';
                 const tNow = Date.now();
                 const latest = Math.max(...expiries);
-                const start = Math.min(createdAt || tNow, latest);
+                const start = Math.min(positionCreatedAt || tNow, latest);
                 const total = Math.max(1, latest - start);
                 const targetTime = start + effTimePos * total;
                 const ds = expiries.map(ms => Math.max(0, Math.round((ms - targetTime) / 86_400_000)));
@@ -922,7 +937,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
               </div>
             </div>
             {/* Core meta */}
-            <div><div className="muted">Created</div><div>{new Date(createdAt).toISOString().slice(0,10)}</div></div>
+            <div><div className="muted">Created</div><div>{new Date(positionCreatedAt).toISOString().slice(0,10)}</div></div>
             <div><div className="muted">DTE</div><div>{calc.dteLabel}</div></div>
             {/* Width (if available) */}
             {(() => {
@@ -1043,7 +1058,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                     <div title={L.leg.symbol} style={{display:'flex', alignItems:'center', flexWrap:'wrap', gap:6}}>
                       <span style={{whiteSpace:'normal', overflowWrap:'anywhere', wordBreak:'break-word', fontSize:'1em'}}>{L.leg.symbol}</span>
                       {(() => {
-                        const label = formatCreatedAtLabel(L.createdAt ?? createdAt);
+                    const label = formatCreatedAtLabel(L.createdAt ?? positionCreatedAt);
                         return label ? (
                           <span style={{ color: '#9c9c9c', fontSize: 'calc(1em - 2px)' }}>{label}</span>
                         ) : null;

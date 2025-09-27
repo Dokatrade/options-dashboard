@@ -47,6 +47,10 @@ function connect(conn: Conn) {
         for (const t of arr) {
           const symbol = t.symbol || (typeof topic === 'string' ? topic.split('.').slice(1).join('.') : undefined);
           if (!symbol) continue;
+          const rawMarkIv = t.markIv != null ? Number(t.markIv) : undefined;
+          const markIv = rawMarkIv != null && isFinite(rawMarkIv)
+            ? (Math.abs(rawMarkIv) <= 3 ? rawMarkIv * 100 : rawMarkIv)
+            : undefined;
           const ticker: Ticker = {
             symbol,
             bid1Price: t.bid1Price != null ? Number(t.bid1Price) : (t.bestBidPrice != null ? Number(t.bestBidPrice) : (t.bidPrice != null ? Number(t.bidPrice) : undefined)),
@@ -54,7 +58,7 @@ function connect(conn: Conn) {
             markPrice: t.markPrice != null ? Number(t.markPrice) : (t.lastPrice != null ? Number(t.lastPrice) : undefined),
             lastPrice: t.lastPrice != null ? Number(t.lastPrice) : undefined,
             price24hPcnt: t.price24hPcnt != null ? Number(t.price24hPcnt) : undefined,
-            markIv: t.markIv != null ? Number(t.markIv) : undefined,
+            markIv,
             indexPrice: t.underlyingPrice != null ? Number(t.underlyingPrice) : (t.indexPrice != null ? Number(t.indexPrice) : undefined),
             delta: t.delta != null ? Number(t.delta) : undefined,
             gamma: t.gamma != null ? Number(t.gamma) : undefined,

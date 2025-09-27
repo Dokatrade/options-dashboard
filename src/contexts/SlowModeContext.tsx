@@ -25,8 +25,8 @@ const SlowModeContext = React.createContext<SlowModeContextValue | null>(null);
 const PREF_KEY = 'positions-ui-v1';
 
 export function SlowModeProvider({ children }: { children: React.ReactNode }) {
-  const [slowMode, setSlowModeState] = React.useState(false);
-  const slowModeRef = React.useRef(false);
+  const [slowMode, setSlowModeState] = React.useState(true);
+  const slowModeRef = React.useRef(true);
   const [slowStats, setSlowStats] = React.useState<SlowModeStats>({ lastUpdated: null, nextUpdate: null, refreshing: false });
   const refreshInFlightRef = React.useRef<Promise<void> | null>(null);
   const timerRef = React.useRef<number | null>(null);

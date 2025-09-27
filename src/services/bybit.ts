@@ -85,19 +85,25 @@ export async function fetchOptionTickers(): Promise<Ticker[]> {
       const normalized = settle || symSettle;
       return normalized === 'USDT';
     })
-    .map((t: any) => ({
-      symbol: t.symbol,
-      bid1Price: Number(t?.bid1Price ?? t?.bestBidPrice ?? NaN),
-      ask1Price: Number(t?.ask1Price ?? t?.bestAskPrice ?? NaN),
-      markPrice: Number(t?.markPrice ?? NaN),
-      markIv: t?.markIv != null ? Number(t.markIv) : (t?.iv != null ? Number(t.iv) : undefined),
-      indexPrice: t?.underlyingPrice != null ? Number(t.underlyingPrice) : (t?.indexPrice != null ? Number(t.indexPrice) : undefined),
-      delta: t?.delta != null ? Number(t.delta) : undefined,
-      gamma: t?.gamma != null ? Number(t.gamma) : undefined,
-      vega: t?.vega != null ? Number(t.vega) : undefined,
-      theta: t?.theta != null ? Number(t.theta) : undefined,
-      openInterest: t?.openInterest != null ? Number(t.openInterest) : undefined,
-    }));
+    .map((t: any) => {
+      const rawMarkIv = t?.markIv != null ? Number(t.markIv) : (t?.iv != null ? Number(t.iv) : undefined);
+      const markIv = rawMarkIv != null && isFinite(rawMarkIv)
+        ? (Math.abs(rawMarkIv) <= 3 ? rawMarkIv * 100 : rawMarkIv)
+        : undefined;
+      return {
+        symbol: t.symbol,
+        bid1Price: Number(t?.bid1Price ?? t?.bestBidPrice ?? NaN),
+        ask1Price: Number(t?.ask1Price ?? t?.bestAskPrice ?? NaN),
+        markPrice: Number(t?.markPrice ?? NaN),
+        markIv,
+        indexPrice: t?.underlyingPrice != null ? Number(t.underlyingPrice) : (t?.indexPrice != null ? Number(t.indexPrice) : undefined),
+        delta: t?.delta != null ? Number(t.delta) : undefined,
+        gamma: t?.gamma != null ? Number(t.gamma) : undefined,
+        vega: t?.vega != null ? Number(t.vega) : undefined,
+        theta: t?.theta != null ? Number(t.theta) : undefined,
+        openInterest: t?.openInterest != null ? Number(t.openInterest) : undefined,
+      };
+    });
 }
 
 // Fetch L1 orderbook (best bid/ask) for a specific option symbol
@@ -130,6 +136,86 @@ export async function fetchSpotEth(): Promise<{ price: number; change24h?: numbe
   const prev = Number(t?.prevPrice24h ?? NaN);
   const change = isFinite(last) && isFinite(prev) ? ((last - prev) / prev) * 100 : undefined;
   return { price: last, change24h: change };
+}
+
+type DeliveryCacheEntry = { price?: number; ts: number; ttl: number };
+const deliveryCache = new Map<string, DeliveryCacheEntry>();
+const deliveryHistoryCache = new Map<string, { list: Array<Record<string, any>>; ts: number }>();
+
+async function getDeliveryPriceDirect(symbol: string, settleCoin?: string): Promise<number | undefined> {
+  type R = { retCode: number; retMsg?: string; result?: { list?: Array<Record<string, any>> } };
+  const endpoint = API.startsWith('http') ? `${API}/v5/market/delivery-price` : `${window.location.origin}${API}/v5/market/delivery-price`;
+  const url = new URL(endpoint);
+  url.searchParams.set('category', 'option');
+  url.searchParams.set('symbol', symbol);
+  if (settleCoin) url.searchParams.set('settleCoin', settleCoin);
+  const data = await getJson<R>(url.toString());
+  const list = data?.result?.list ?? [];
+  for (const raw of list) {
+    const priceCandidate = raw?.deliveryPrice ?? raw?.markPrice ?? raw?.price ?? raw?.settlePrice;
+    const n = Number(priceCandidate);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return undefined;
+}
+
+async function getDeliveryHistory(baseCoin: string, settleCoin?: string): Promise<Array<Record<string, any>>> {
+  const cacheKey = `${baseCoin}:${settleCoin ?? ''}`;
+  const cache = deliveryHistoryCache.get(cacheKey);
+  if (cache && Date.now() - cache.ts < 60 * 60 * 1000) return cache.list;
+  type R = { retCode: number; retMsg?: string; result?: { list?: Array<Record<string, any>> } };
+  const endpoint = API.startsWith('http') ? `${API}/v5/market/delivery-history` : `${window.location.origin}${API}/v5/market/delivery-history`;
+  const url = new URL(endpoint);
+  url.searchParams.set('category', 'option');
+  url.searchParams.set('baseCoin', baseCoin);
+  if (settleCoin) url.searchParams.set('settleCoin', settleCoin);
+  url.searchParams.set('limit', '200');
+  try {
+    const data = await getJson<R>(url.toString());
+    const list = data?.result?.list ?? [];
+    deliveryHistoryCache.set(cacheKey, { list, ts: Date.now() });
+    return list;
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchOptionDeliveryPrice(symbol: string): Promise<number | undefined> {
+  const cache = deliveryCache.get(symbol);
+  if (cache && Date.now() - cache.ts < cache.ttl) return cache.price;
+  const parts = symbol.split('-');
+  const baseCoin = (parts[0] ?? '').toUpperCase();
+  const settleCoin = (parts[parts.length - 1] ?? '').toUpperCase();
+  try {
+    const direct = await getDeliveryPriceDirect(symbol, settleCoin);
+    if (Number.isFinite(direct) && (direct as number) > 0) {
+      deliveryCache.set(symbol, { price: direct, ts: Date.now(), ttl: 12 * 60 * 60 * 1000 });
+      return direct;
+    }
+  } catch (err) {
+    console.warn('[delivery-price] symbol request failed', symbol, err);
+  }
+
+  if (baseCoin) {
+    try {
+      const hist = await getDeliveryHistory(baseCoin, settleCoin);
+      for (const raw of hist) {
+        const sym = (raw?.symbol ?? raw?.optionSymbol ?? '').toString();
+        if (sym && sym !== symbol) continue;
+        const priceCandidate = raw?.deliveryPrice ?? raw?.markPrice ?? raw?.price ?? raw?.settlePrice;
+        const n = Number(priceCandidate);
+        if (Number.isFinite(n) && n > 0) {
+          deliveryCache.set(symbol, { price: n, ts: Date.now(), ttl: 12 * 60 * 60 * 1000 });
+          return n;
+        }
+      }
+    } catch (err) {
+      console.warn('[delivery-history] lookup failed', symbol, err);
+    }
+  }
+
+  deliveryCache.set(symbol, { price: undefined, ts: Date.now(), ttl: 5 * 60 * 1000 });
+  return undefined;
 }
 
 export type HV30Stats = {

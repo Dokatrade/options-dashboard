@@ -27,6 +27,13 @@ export interface Ticker {
   openInterest?: number;
 }
 
+export type LegSettlement = {
+  settleUnderlying: number;
+  settledAt: number;
+};
+
+export type SettlementMap = Record<string, LegSettlement>;
+
 export interface Leg {
   symbol: string;
   strike: number;
@@ -46,6 +53,7 @@ export interface SpreadPosition {
   createdAt: number;
   closedAt?: number;
   favorite?: boolean;
+  settlements?: SettlementMap;
 }
 
 export interface PortfolioSettings {
@@ -61,6 +69,8 @@ export interface PositionLeg {
   entryPrice: number; // price per contract at save time
   createdAt?: number; // ms epoch when the leg was added to the position
   hidden?: boolean; // when true, excluded from all calcs/visuals until unhidden
+  settleS?: number; // underlying price used to settle this leg
+  settledAt?: number; // ms epoch when settlement was captured
 }
 
 export interface Position {
@@ -70,4 +80,5 @@ export interface Position {
   note?: string;
   legs: PositionLeg[];
   favorite?: boolean;
+  settlements?: SettlementMap;
 }
