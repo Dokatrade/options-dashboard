@@ -4,15 +4,17 @@ import { PortfolioSummary } from './components/PortfolioSummary';
 import { UnifiedPositionsTable } from './components/UnifiedPositionsTable';
 import { HelpModal } from './components/HelpModal';
 import { SlowModeProvider } from './contexts/SlowModeContext';
+import { TopBarBackupButtons } from './components/TopBarBackupButtons';
 
 export default function App() {
   const [help, setHelp] = React.useState(false);
   return (
     <SlowModeProvider>
       <div className="container">
-        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
+        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 8}}>
           <h2 style={{margin: 0}}>ETH Options Dashboard (Bybit Public API)</h2>
-          <div>
+          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+            <TopBarBackupButtons />
             <button className="ghost" onClick={() => setHelp(true)}>Help</button>
           </div>
         </div>

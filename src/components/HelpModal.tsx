@@ -118,7 +118,7 @@ export function HelpModal({ onClose }: Props) {
 
           <p><strong>Сохранение и экспорт</strong></p>
           <ul>
-            <li>Все данные пользователя хранятся локально (localStorage). Бэкап: <strong>Export/Import JSON</strong> в Portfolio.</li>
+            <li>Все данные пользователя хранятся локально (localStorage). Бэкап: <strong>Export/Import JSON</strong> в шапке рядом с <em>Help</em>.</li>
             <li>В My Positions доступен <strong>Export CSV</strong> текущего списка (включая combo).</li>
           </ul>
 
