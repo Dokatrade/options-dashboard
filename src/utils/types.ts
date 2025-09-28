@@ -41,6 +41,13 @@ export interface Leg {
   expiryMs: number;
 }
 
+export type CloseSnapshot = {
+  timestamp: number;
+  indexPrice?: number;
+  spotPrice?: number;
+  pnlExec?: number;
+};
+
 export interface SpreadPosition {
   id: string;
   short: Leg;
@@ -52,6 +59,7 @@ export interface SpreadPosition {
   note?: string;
   createdAt: number;
   closedAt?: number;
+  closeSnapshot?: CloseSnapshot;
   favorite?: boolean;
   settlements?: SettlementMap;
 }
@@ -77,6 +85,7 @@ export interface Position {
   id: string;
   createdAt: number;
   closedAt?: number;
+  closeSnapshot?: CloseSnapshot;
   note?: string;
   legs: PositionLeg[];
   favorite?: boolean;

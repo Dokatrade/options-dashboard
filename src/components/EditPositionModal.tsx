@@ -7,6 +7,33 @@ import type { Position, InstrumentInfo, Leg, OptionType } from '../utils/types';
 
 type Props = { id: string; onClose: () => void };
 
+const MONTH_CODES = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'] as const;
+const MONTH_INDEX: Record<string, number> = MONTH_CODES.reduce((acc, code, idx) => ({ ...acc, [code]: idx }), {} as Record<string, number>);
+
+const dteFrom = (ms: number) => {
+  return Math.max(0, Math.round((ms - Date.now()) / (1000 * 60 * 60 * 24)));
+};
+
+const parseExpiryCode = (raw: string): number | undefined => {
+  if (!raw) return undefined;
+  const upper = raw.toUpperCase();
+  const dayPart2 = upper.slice(0, 2);
+  let day = Number(dayPart2);
+  let monthStart = 2;
+  if (!Number.isFinite(day)) {
+    day = Number(upper.slice(0, 1));
+    monthStart = 1;
+  }
+  const monthCode = upper.slice(monthStart, monthStart + 3);
+  const mon = MONTH_INDEX[monthCode];
+  const yearPart = upper.slice(monthStart + 3, monthStart + 5);
+  const year = Number(yearPart);
+  if (!Number.isFinite(day) || !Number.isFinite(year) || mon == null) return undefined;
+  const fullYear = 2000 + year;
+  const ms = Date.UTC(fullYear, mon, day, 8, 0, 0, 0);
+  return Number.isFinite(ms) ? ms : undefined;
+};
+
 const ensureLegCreatedAt = <T extends { createdAt?: number }>(leg: T, fallback: number): T => {
   const raw = Number((leg as any)?.createdAt);
   if (Number.isFinite(raw)) return { ...leg, createdAt: raw };
@@ -35,6 +62,72 @@ export function EditPositionModal({ id, onClose }: Props) {
   const [perpUsdTotal, setPerpUsdTotal] = React.useState<number>(0);
   const [perpMode, setPerpMode] = React.useState<'contracts' | 'usd'>('contracts');
 
+  const parseSymbol = React.useCallback((raw: string) => {
+    if (!raw) return null;
+    const upper = raw.toUpperCase();
+    const parts = upper.split('-');
+    if (parts.length < 3) return null;
+    const code = parts[1];
+    let strike: number | undefined;
+    let typeChar: OptionType | undefined;
+    for (let i = 2; i < parts.length; i++) {
+      const part = parts[i];
+      if (!typeChar && (part === 'C' || part === 'P' || part.startsWith('C') || part.startsWith('P'))) {
+        typeChar = part.charAt(0) as OptionType;
+        continue;
+      }
+      if (!strike) {
+        const numeric = Number(part.replace(/[^0-9.]/g, ''));
+        if (Number.isFinite(numeric)) strike = numeric;
+      }
+    }
+    if (!typeChar || !Number.isFinite(strike)) return null;
+    return { code, strike: strike!, type: typeChar };
+  }, []);
+
+  const inferTypeChar = React.useCallback((segments: string[]): OptionType | undefined => {
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const raw = segments[i];
+      if (!raw) continue;
+      const seg = raw.toUpperCase();
+      if (!seg) continue;
+      if (seg === 'C' || seg === 'CALL' || seg.startsWith('C-')) return 'C';
+      if (seg === 'P' || seg === 'PUT' || seg.startsWith('P-')) return 'P';
+      if (seg === 'USDT' || seg === 'USD' || /^[0-9.]+$/.test(seg)) continue;
+      const head = seg.charAt(0);
+      if (head === 'C' || head === 'P') return head as OptionType;
+    }
+    return undefined;
+  }, []);
+
+  const computeExpiries = React.useCallback((type: OptionType | null) => {
+    if (!type) return [] as number[];
+    const set = new Set<number>();
+    draft
+      .filter((d) => d.leg.optionType === type && Number.isFinite(d.leg.expiryMs))
+      .forEach((d) => set.add(Number(d.leg.expiryMs)));
+    instruments
+      .filter((i) => i.optionType === type && Number.isFinite(i.deliveryTime))
+      .forEach((i) => set.add(Number(i.deliveryTime)));
+    Object.keys(tickers || {}).forEach((sym) => {
+      if (!sym.includes('-')) return;
+      const parts = sym.split('-');
+      if (parts.length < 3) return;
+      const code = parts[1];
+      const typeChar = inferTypeChar(parts.slice(2));
+      if (typeChar && typeChar !== type) return;
+      const ticker = tickers[sym];
+      const expMs = Number((ticker as any)?.expiryDate ?? (ticker as any)?.deliveryTime);
+      if (Number.isFinite(expMs) && expMs > 0) {
+        set.add(Number(expMs));
+        return;
+      }
+      const ms = parseExpiryCode(code);
+      if (ms) set.add(ms);
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [draft, inferTypeChar, instruments, tickers]);
+
   React.useEffect(() => {
     if (!position) return;
     const fallback = Number.isFinite(position.createdAt) ? Number(position.createdAt) : Date.now();
@@ -50,37 +143,53 @@ export function EditPositionModal({ id, onClose }: Props) {
 
   const buildChain = React.useCallback((exp: number | '', type: OptionType | null) => {
     if (!exp || !type) return [] as InstrumentInfo[];
-    const base = instruments
+    const map = new Map<string, InstrumentInfo>();
+    instruments
       .filter((i) => i.deliveryTime === exp && i.optionType === type)
-      .sort((a, b) => a.strike - b.strike);
-    const monthCodes = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+      .forEach((i) => {
+        const key = ensureUsdtSymbol(i.symbol);
+        map.set(key, { ...i, symbol: key });
+      });
+
     const expiryCode = (ms: number): string => {
       const d = new Date(ms);
       const dd = String(d.getUTCDate()).padStart(2, '0');
-      const m = monthCodes[d.getUTCMonth()];
+      const m = MONTH_CODES[d.getUTCMonth()];
       const yy = String(d.getUTCFullYear() % 100).padStart(2, '0');
       return `${dd}${m}${yy}`;
     };
-    try {
-      const code = expiryCode(exp as number);
-      const seen = new Set(base.map((i) => i.symbol));
-      const extras: InstrumentInfo[] = [];
-      Object.keys(tickers || {}).forEach((sym) => {
-        if (!sym.includes(`-${code}-`)) return;
-        const parts = sym.split('-');
-        const optPart = (parts?.[3] || '').toUpperCase();
-        if (!optPart.startsWith(type)) return;
-        const normalized = ensureUsdtSymbol(sym);
-        if (seen.has(normalized) || seen.has(sym)) return;
-        const strike = Number(parts?.[2]);
-        if (!Number.isFinite(strike)) return;
-        const settleCoin = parts?.[4] ? parts[4].toUpperCase() : 'USDT';
-        extras.push({ symbol: normalized, strike, optionType: type, deliveryTime: exp as number, settleCoin });
-      });
-      if (extras.length) return [...base, ...extras].sort((a, b) => a.strike - b.strike);
-    } catch {}
-    return base;
-  }, [instruments, tickers]);
+
+    const code = expiryCode(exp as number);
+    const tolerance = 12 * 60 * 60 * 1000; // 12h tolerance for API rounding
+
+    Object.entries(tickers || {}).forEach(([sym, ticker]) => {
+      const parsed = parseSymbol(sym);
+      if (!parsed || parsed.type !== type) return;
+
+      let expiryMs = Number((ticker as any)?.deliveryTime ?? (ticker as any)?.expiryDate);
+      if (!Number.isFinite(expiryMs)) {
+        const parsedCodeMs = parseExpiryCode(parsed.code);
+        expiryMs = parsedCodeMs ?? NaN;
+      }
+      if (!Number.isFinite(expiryMs)) return;
+      const expiryCandidate = Number(expiryMs);
+
+      if (Math.abs(expiryCandidate - (exp as number)) > tolerance && parsed.code !== code) return;
+
+      const normalized = ensureUsdtSymbol(sym);
+      if (!map.has(normalized)) {
+        map.set(normalized, {
+          symbol: normalized,
+          strike: parsed.strike,
+          optionType: type,
+          deliveryTime: expiryCandidate || (exp as number),
+          settleCoin: 'USDT',
+        });
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.strike - b.strike);
+  }, [instruments, parseSymbol, tickers]);
 
   React.useEffect(() => {
     setChain(buildChain(expiry, optType));
@@ -156,7 +265,7 @@ export function EditPositionModal({ id, onClose }: Props) {
   const toggleHide = (idx: number) => setDraft(d => d.map((L, i) => i === idx ? { ...L, hidden: !L.hidden } : L));
   const setLegQty = (idx: number, q: number) => setDraft(d => d.map((L,i)=> i===idx ? { ...L, qty: Math.max(0.1, Math.round(q*10)/10) } : L));
 
-  const expiries = Array.from(new Set(instruments.filter(i => i.optionType === optType).map(i => i.deliveryTime))).sort((a,b)=>a-b);
+  const expiries = React.useMemo(() => computeExpiries(optType), [computeExpiries, optType]);
   const rollType = React.useMemo<OptionType | null>(() => {
     if (rollIdx === '' || !draft[Number(rollIdx)]) return null;
     return draft[Number(rollIdx)].leg.optionType;
@@ -165,6 +274,17 @@ export function EditPositionModal({ id, onClose }: Props) {
     if (rollIdx === '' || !rollType || !rollExpiry) return [] as InstrumentInfo[];
     return buildChain(rollExpiry, rollType);
   }, [buildChain, rollIdx, rollType, rollExpiry]);
+  const rollExpiries = React.useMemo(() => computeExpiries(rollType), [computeExpiries, rollType]);
+
+  React.useEffect(() => {
+    if (expiry === '' || expiries.includes(expiry)) return;
+    setExpiry('');
+  }, [expiries, expiry]);
+
+  React.useEffect(() => {
+    if (rollExpiry === '' || rollExpiries.includes(rollExpiry)) return;
+    setRollExpiry('');
+  }, [rollExpiries, rollExpiry]);
 
   const midEth = midPrice(tickers['ETHUSDT']);
   const sanitizedPerpQty = (() => {
@@ -212,8 +332,10 @@ export function EditPositionModal({ id, onClose }: Props) {
                 <div className="muted">Target expiry</div>
                 <select value={rollExpiry} onChange={(e)=>{ const v=e.target.value; setRollExpiry(v===''?'':Number(v)); setRollSymbol(''); }} disabled={rollIdx===''}>
                   <option value="">Select expiry</option>
-                  {Array.from(new Set(instruments.filter(i=> i.optionType===rollType).map(i=>i.deliveryTime))).sort().map(ms=> (
-                    <option key={ms as number} value={ms as number}>{new Date(ms as number).toISOString().slice(0,10)}</option>
+                  {rollExpiries.map((ms) => (
+                    <option key={ms} value={ms}>
+                      {new Date(ms).toISOString().slice(0,10)} · {dteFrom(ms)}d
+                    </option>
                   ))}
                 </select>
               </label>
@@ -276,7 +398,11 @@ export function EditPositionModal({ id, onClose }: Props) {
               <div className="muted">Expiry</div>
               <select value={expiry} onChange={(e)=>{ const v=e.target.value; setExpiry(v===''?'':Number(v)); setSymbol(''); }}>
                 <option value="">Select expiry</option>
-                {expiries.map(ms => <option key={ms} value={ms}>{new Date(ms).toISOString().slice(0,10)}</option>)}
+                {expiries.map(ms => (
+                  <option key={ms} value={ms}>
+                    {new Date(ms).toISOString().slice(0,10)} · {dteFrom(ms)}d
+                  </option>
+                ))}
               </select>
             </label>
             <label style={{display:'flex', flexDirection:'column', flex:'0 1 220px', minWidth:182}}>

@@ -3,6 +3,7 @@ import { useStore } from '../store/store';
 import { fetchOptionTickers, midPrice, bestBidAsk } from '../services/bybit';
 import { subscribeTicker } from '../services/ws';
 import { PositionView } from './PositionView';
+import type { CloseSnapshot } from '../utils/types';
 import { EditPositionModal } from './EditPositionModal';
 
 type RowCalc = {
@@ -60,6 +61,38 @@ export function SpreadTable() {
   const [viewId, setViewId] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
   const [editId, setEditId] = React.useState<string | null>(null);
+
+  const buildCloseSnapshot = React.useCallback((pos: typeof spreads[number]): CloseSnapshot => {
+    const now = Date.now();
+    const shortTicker = tickers[pos.short.symbol] || {};
+    const longTicker = tickers[pos.long.symbol] || {};
+    const { bid: shortBid, ask: shortAsk } = bestBidAsk(shortTicker) ?? {};
+    const { bid: longBid, ask: longAsk } = bestBidAsk(longTicker) ?? {};
+    const shortMidRaw = midPrice(shortTicker);
+    const longMidRaw = midPrice(longTicker);
+    const toNumber = (value: unknown) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : undefined;
+    };
+    const shortMid = toNumber(shortMidRaw) ?? 0;
+    const longMid = toNumber(longMidRaw) ?? 0;
+    const shortExec = toNumber(shortAsk) ?? shortMid;
+    const longExec = toNumber(longBid) ?? longMid;
+    const entryShort = pos.entryShort != null ? Number(pos.entryShort) : (pos.entryLong != null ? Number(pos.cEnter) + Number(pos.entryLong) : Number(pos.cEnter));
+    const entryLong = pos.entryLong != null ? Number(pos.entryLong) : (pos.entryShort != null ? Number(pos.entryShort) - Number(pos.cEnter) : 0);
+    const qty = Number(pos.qty) > 0 ? Number(pos.qty) : 1;
+    const netEntry = (entryShort * qty) - (entryLong * qty);
+    const netExec = (shortExec * qty) - (longExec * qty);
+    const pnlExec = netEntry - netExec;
+    const indexPriceCandidate = toNumber(shortTicker?.indexPrice) ?? toNumber(longTicker?.indexPrice);
+    const snapshot: CloseSnapshot = { timestamp: now };
+    if (indexPriceCandidate != null) {
+      snapshot.indexPrice = indexPriceCandidate;
+      snapshot.spotPrice = indexPriceCandidate;
+    }
+    if (Number.isFinite(pnlExec)) snapshot.pnlExec = pnlExec;
+    return snapshot;
+  }, [tickers, spreads]);
 
 
   // Initial fetch once, then WS live updates
@@ -142,7 +175,23 @@ export function SpreadTable() {
                           <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => setViewId(p.id)}>View</button>
                         </div>
                         <div style={{display:'flex', alignItems:'center', gap:6}}>
-                          <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Mark this spread as closed?')) markClosed(p.id); }}>Mark closed</button>
+                          <button
+                            className="ghost"
+                            style={{
+                              height: 28,
+                              lineHeight: '28px',
+                              padding: '0 10px',
+                              color: p.closedAt != null ? '#9ba0a6' : undefined,
+                              cursor: p.closedAt != null ? 'not-allowed' : undefined,
+                            }}
+                            onClick={() => {
+                              if (p.closedAt != null) return;
+                              if (!window.confirm('Exit this spread?')) return;
+                              const snapshot = buildCloseSnapshot(p);
+                              markClosed(p.id, snapshot);
+                            }}
+                            disabled={p.closedAt != null}
+                          >Exit</button>
                           <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Delete this spread? This cannot be undone.')) remove(p.id); }}>Delete</button>
                         </div>
                       </div>
@@ -232,11 +281,19 @@ export function SpreadTable() {
         const title = `Vertical ${pos.short.optionType} ${pos.short.strike}/${pos.long.strike}`;
         return (
           <PositionView
+            id={`S:${pos.id}`}
             legs={legs}
             createdAt={pos.createdAt}
+            closedAt={pos.closedAt}
+            closeSnapshot={pos.closeSnapshot}
             note={pos.note}
             title={title}
             onClose={() => setViewId(null)}
+            onClosePosition={() => {
+              const snapshot = buildCloseSnapshot(pos);
+              markClosed(pos.id, snapshot);
+              setViewId(null);
+            }}
             onEdit={() => {
               setViewId(null);
               try {

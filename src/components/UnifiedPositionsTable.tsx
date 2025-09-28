@@ -4,7 +4,8 @@ import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
 import { midPrice, bestBidAsk, fetchOptionTickers, fetchHV30, fetchOrderbookL1, fetchSpotEth, fetchOptionDeliveryPrice } from '../services/bybit';
 import type { HV30Stats } from '../services/bybit';
 import { bsImpliedVol } from '../utils/bs';
-import type { Position, PositionLeg, SpreadPosition, SettlementMap } from '../utils/types';
+import type { Position, PositionLeg, SpreadPosition, SettlementMap, CloseSnapshot } from '../utils/types';
+import { describeStrategy, type StrategyLeg } from '../utils/strategyDetection';
 import { downloadCSV, toCSV } from '../utils/csv';
 import { PositionView } from './PositionView';
 import { EditPositionModal } from './EditPositionModal';
@@ -27,6 +28,7 @@ type Row = {
   legs: PositionLeg[];
   createdAt: number;
   closedAt?: number;
+  closeSnapshot?: CloseSnapshot;
   note?: string;
   // vertical extras
   cEnter?: number; // per contract
@@ -138,6 +140,7 @@ function fromSpread(s: SpreadPosition): Row {
     ],
     createdAt: s.createdAt,
     closedAt: s.closedAt,
+    closeSnapshot: s.closeSnapshot,
     note: s.note,
     cEnter: s.cEnter,
     qty: s.qty ?? 1,
@@ -153,6 +156,7 @@ function fromPosition(p: Position): Row {
     legs: p.legs,
     createdAt: p.createdAt,
     closedAt: p.closedAt,
+    closeSnapshot: p.closeSnapshot,
     note: p.note,
     favorite: p.favorite,
     settlements: p.settlements,
@@ -1414,8 +1418,40 @@ export function UnifiedPositionsTable() {
     };
   };
 
+  const buildCloseSnapshot = (r: Row): CloseSnapshot => {
+    const now = Date.now();
+    const calcSnapshot = calc(r);
+    const indexPrice = (() => {
+      for (const leg of r.legs) {
+        const ticker = tickers[leg.leg.symbol];
+        const raw = ticker?.indexPrice;
+        if (raw != null && Number.isFinite(Number(raw))) return Number(raw);
+      }
+      return undefined;
+    })();
+    const spotCandidate = computeSpotForRow(r);
+    const spotPrice = spotCandidate != null && Number.isFinite(Number(spotCandidate)) ? Number(spotCandidate) : undefined;
+    const pnlExec = Number.isFinite(calcSnapshot.pnlExec) ? calcSnapshot.pnlExec : undefined;
+    const snapshot: CloseSnapshot = { timestamp: now };
+    if (indexPrice != null) snapshot.indexPrice = indexPrice;
+    if (spotPrice != null) snapshot.spotPrice = spotPrice;
+    if (pnlExec != null) snapshot.pnlExec = pnlExec;
+    return snapshot;
+  };
+
+  const applyCloseSnapshot = (row: Row, snapshot: CloseSnapshot) => {
+    if (row.id.startsWith('S:')) markClosed(row.id.slice(2), snapshot);
+    else closePosition(row.id.slice(2), snapshot);
+    setView((current) => {
+      if (!current || current.id !== row.id) return current;
+      return { ...current, closedAt: snapshot.timestamp, closeSnapshot: snapshot };
+    });
+  };
+
   const onCloseRow = (r: Row) => {
-    if (r.id.startsWith('S:')) markClosed(r.id.slice(2)); else closePosition(r.id.slice(2));
+    if (r.closedAt != null) return;
+    const snapshot = buildCloseSnapshot(r);
+    applyCloseSnapshot(r, snapshot);
   };
   const onDeleteRow = (r: Row) => {
     if (r.id.startsWith('S:')) removeSpread(r.id.slice(2)); else removePosition(r.id.slice(2));
@@ -1778,7 +1814,21 @@ export function UnifiedPositionsTable() {
                                   >Settle</button>
                                 )}
                                 {actionVisibility.close && (
-                                  <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Close this item?')) onCloseRow(r); }}>Close</button>
+                                  <button
+                                    className="ghost"
+                                    style={{
+                                      height: 28,
+                                      lineHeight: '28px',
+                                      padding: '0 10px',
+                                      color: r.closedAt != null ? '#9ba0a6' : undefined,
+                                      cursor: r.closedAt != null ? 'not-allowed' : undefined,
+                                    }}
+                                    onClick={() => {
+                                      if (r.closedAt != null) return;
+                                      if (window.confirm('Exit this item?')) onCloseRow(r);
+                                    }}
+                                    disabled={r.closedAt != null}
+                                  >Exit</button>
                                 )}
                                 {actionVisibility.delete && (
                                   <button className="ghost" style={{height: 28, lineHeight: '28px', padding: '0 10px'}} onClick={() => { if (window.confirm('Delete this item? This cannot be undone.')) onDeleteRow(r); }}>Del</button>
@@ -1939,11 +1989,20 @@ export function UnifiedPositionsTable() {
       </div>
       {view && (
         <PositionView
+          id={view.id}
           legs={view.legs}
           createdAt={view.createdAt}
+          closedAt={view.closedAt}
+          closeSnapshot={view.closeSnapshot}
           note={view.note}
           title={strategyName(view.legs)}
           onClose={() => setView(null)}
+          onClosePosition={() => {
+            const target = view;
+            if (!target) return;
+            const snapshot = buildCloseSnapshot(target);
+            applyCloseSnapshot(target, snapshot);
+          }}
           hiddenSymbols={view.legs.filter(L=>L.hidden).map(L=>L.leg.symbol)}
           onEdit={() => {
             const current = view;
@@ -1994,7 +2053,7 @@ export function UnifiedPositionsTable() {
                       .filter((v) => Number.isFinite(v));
                     const baseCreated = Number.isFinite(pos.createdAt) ? Number(pos.createdAt) : Date.now();
                     const viewCreatedAt = legTimes.length ? Math.min(baseCreated, ...legTimes) : baseCreated;
-                    setView({ id: 'P:' + pos.id, kind: 'multi', legs: pos.legs, createdAt: viewCreatedAt, closedAt: pos.closedAt, note: pos.note, favorite: pos.favorite });
+                    setView({ id: 'P:' + pos.id, kind: 'multi', legs: pos.legs, createdAt: viewCreatedAt, closedAt: pos.closedAt, closeSnapshot: pos.closeSnapshot, note: pos.note, favorite: pos.favorite });
                   }
                 }
               } catch {}
@@ -2288,286 +2347,17 @@ function SettleExpiredModal({ row, positionLabel, legsSnapshot, expiredExpiries,
   const netEntryFor = (legs: PositionLeg[]) => legs.filter(L=>!L.hidden).reduce((a, L) => a + (L.side === 'short' ? 1 : -1) * (Number(L.entryPrice) || 0) * (Number(L.qty) || 1), 0);
 
   const strategyName = (legs: PositionLeg[]): string => {
-    const active = legs.filter(L => !L.hidden);
+    const active = legs.filter((leg) => !leg.hidden);
     if (!active.length) return '—';
 
-    type NormalizedLeg = {
-      side: 'long' | 'short';
-      type: 'C' | 'P';
-      exp: number;
-      k: number;
-      qty: number;
-      isUnderlying: boolean;
-      symbol: string;
-    };
+    const normalized: StrategyLeg[] = active.map((leg) => ({
+      side: leg.side,
+      type: leg.leg.optionType,
+      expiryMs: Number(leg.leg.expiryMs) || 0,
+      strike: Number(leg.leg.strike) || 0,
+      qty: Number(leg.qty) || 0,
+      symbol: String(leg.leg.symbol || ''),
+    }));
 
-    const norm: NormalizedLeg[] = active.map(l => {
-      const symbol = String(l.leg.symbol || '');
-      const exp = Number(l.leg.expiryMs) || 0;
-      const isUnderlying = !symbol.includes('-') || exp <= 0;
-      return {
-        side: l.side,
-        type: l.leg.optionType,
-        exp,
-        k: Number(l.leg.strike) || 0,
-        qty: Number(l.qty) || 0,
-        isUnderlying,
-        symbol,
-      };
-    });
-
-    const tol = 1e-6;
-    const same = (a: number, b: number) => Math.abs(a - b) <= tol;
-    const approx = (a: number, b: number) => Math.abs(a - b) <= Math.max(0.01, 0.02 * Math.max(Math.abs(a), Math.abs(b)));
-    const absQty = (leg: NormalizedLeg) => Math.abs(Number(leg.qty) || 0);
-    const sumAbs = (arr: NormalizedLeg[]) => arr.reduce((acc, x) => acc + absQty(x), 0);
-    const net = netEntryFor(active);
-
-    const optionLegs = norm.filter(l => !l.isUnderlying);
-    const underlyingLegs = norm.filter(l => l.isUnderlying);
-
-    if (!optionLegs.length && underlyingLegs.length) {
-      if (underlyingLegs.length === 1) return underlyingLegs[0].side === 'long' ? 'Long Underlying' : 'Short Underlying';
-      const longQty = sumAbs(underlyingLegs.filter(l => l.side === 'long'));
-      const shortQty = sumAbs(underlyingLegs.filter(l => l.side === 'short'));
-      if (approx(longQty, shortQty) && longQty > 0) return 'Hedged Underlying Pair';
-      return 'Underlying Combo';
-    }
-
-    const coverageOK = (coverQty: number, optionQty: number) => {
-      if (!(optionQty > 0)) return true;
-      const slack = Math.max(0.01, 0.05 * optionQty);
-      return coverQty + slack >= optionQty;
-    };
-
-    if (underlyingLegs.length) {
-      const longUnderQty = sumAbs(underlyingLegs.filter(l => l.side === 'long'));
-      const shortUnderQty = sumAbs(underlyingLegs.filter(l => l.side === 'short'));
-
-      const qtyMatches = (legsToCheck: NormalizedLeg[], target: number) => legsToCheck.every(l => coverageOK(target, absQty(l)));
-
-      if (longUnderQty > 0 && !shortUnderQty) {
-        const shortCalls = optionLegs.filter(l => l.type === 'C' && l.side === 'short');
-        const otherOpts = optionLegs.filter(l => !(l.type === 'C' && l.side === 'short'));
-        if (shortCalls.length && !otherOpts.length) {
-          const totalShortCalls = sumAbs(shortCalls);
-          if (coverageOK(longUnderQty, totalShortCalls)) return shortCalls.length === 1 ? 'Covered Call' : 'Covered Calls';
-        }
-        if (optionLegs.length === 1) {
-          const opt = optionLegs[0];
-          if (coverageOK(longUnderQty, absQty(opt))) {
-            if (opt.type === 'C' && opt.side === 'short') return 'Covered Call';
-            if (opt.type === 'P' && opt.side === 'long') return 'Protective Put';
-          }
-        }
-        if (optionLegs.length === 2) {
-          const shortCalls = optionLegs.filter(l => l.type === 'C' && l.side === 'short');
-          const longPuts = optionLegs.filter(l => l.type === 'P' && l.side === 'long');
-          const shortPuts = optionLegs.filter(l => l.type === 'P' && l.side === 'short');
-          const longCalls = optionLegs.filter(l => l.type === 'C' && l.side === 'long');
-          if (shortCalls.length === 1 && longPuts.length === 1 && qtyMatches([shortCalls[0], longPuts[0]], longUnderQty)) {
-            const sameExpiry = same(shortCalls[0].exp, longPuts[0].exp);
-            return sameExpiry ? 'Collar' : 'Diagonal Collar';
-          }
-          if (shortCalls.length === 1 && shortPuts.length === 1 && qtyMatches([shortCalls[0], shortPuts[0]], longUnderQty)) {
-            return 'Covered Strangle';
-          }
-          if (longCalls.length === 1 && longPuts.length === 1 && qtyMatches([longCalls[0], longPuts[0]], longUnderQty)) {
-            return 'Protective Strangle';
-          }
-        }
-      }
-
-      if (shortUnderQty > 0 && !longUnderQty) {
-        const shortPuts = optionLegs.filter(l => l.type === 'P' && l.side === 'short');
-        const otherOpts = optionLegs.filter(l => !(l.type === 'P' && l.side === 'short'));
-        if (shortPuts.length && !otherOpts.length) {
-          const totalShortPuts = sumAbs(shortPuts);
-          if (coverageOK(shortUnderQty, totalShortPuts)) return shortPuts.length === 1 ? 'Covered Put' : 'Covered Puts';
-        }
-        if (optionLegs.length === 1) {
-          const opt = optionLegs[0];
-          if (coverageOK(shortUnderQty, absQty(opt))) {
-            if (opt.type === 'P' && opt.side === 'short') return 'Covered Put';
-            if (opt.type === 'C' && opt.side === 'long') return 'Protective Call';
-          }
-        }
-        if (optionLegs.length === 2) {
-          const longCalls = optionLegs.filter(l => l.type === 'C' && l.side === 'long');
-          const shortPuts = optionLegs.filter(l => l.type === 'P' && l.side === 'short');
-          const longPuts = optionLegs.filter(l => l.type === 'P' && l.side === 'long');
-          const shortCalls = optionLegs.filter(l => l.type === 'C' && l.side === 'short');
-          if (longCalls.length === 1 && shortPuts.length === 1 && qtyMatches([longCalls[0], shortPuts[0]], shortUnderQty)) {
-            const sameExpiry = same(longCalls[0].exp, shortPuts[0].exp);
-            return sameExpiry ? 'Reverse Collar' : 'Reverse Diagonal Collar';
-          }
-          if (shortCalls.length === 1 && shortPuts.length === 1 && qtyMatches([shortCalls[0], shortPuts[0]], shortUnderQty)) {
-            return 'Covered Short Strangle';
-          }
-          if (longCalls.length === 1 && longPuts.length === 1 && qtyMatches([longCalls[0], longPuts[0]], shortUnderQty)) {
-            return 'Protective Short Strangle';
-          }
-        }
-      }
-
-      if (approx(longUnderQty, shortUnderQty) && longUnderQty > 0) return 'Delta-Neutral Stock Hedge';
-      return 'Stock & Options Combo';
-    }
-
-    const Ls = optionLegs;
-    if (!Ls.length) return 'Custom Strategy';
-
-    const allSameExp = Ls.every(x => same(x.exp, Ls[0].exp));
-    const allSameType = Ls.every(x => x.type === Ls[0].type);
-    const byType = (t: 'C' | 'P') => Ls.filter(x => x.type === t);
-    const bySide = (s: 'long' | 'short') => Ls.filter(x => x.side === s);
-    const sumQty = (arr: typeof Ls) => arr.reduce((a, x) => a + (Number(x.qty) || 0), 0);
-    const sortedByK = (arr: typeof Ls) => [...arr].sort((a, b) => a.k - b.k);
-
-    // 1 leg
-    if (Ls.length === 1) {
-      const a = Ls[0];
-      const side = a.side === 'long' ? 'Long' : 'Short';
-      const kind = a.type === 'C' ? 'Call' : 'Put';
-      return `${side} ${kind}`;
-    }
-
-    // 2 legs
-    if (Ls.length === 2) {
-      const [a, b] = Ls;
-      const sameType = a.type === b.type;
-      const sameExp = same(a.exp, b.exp);
-      const sameStrike = same(a.k, b.k);
-      const bothLong = a.side === 'long' && b.side === 'long';
-      const bothShort = a.side === 'short' && b.side === 'short';
-      const opposite = a.side !== b.side;
-      if (!sameType && sameExp) {
-        if (bothLong) return sameStrike ? 'Long Straddle' : 'Long Strangle';
-        if (bothShort) return sameStrike ? 'Short Straddle' : 'Short Strangle';
-      }
-      if (sameType && opposite) {
-        const typ = a.type === 'C' ? 'Call' : 'Put';
-        if (!sameExp && sameStrike) {
-          const longIsLater = (a.side === 'long' ? a : b).exp > (a.side === 'short' ? a : b).exp;
-          return `${longIsLater ? 'Long' : 'Short'} ${typ} Calendar`;
-        }
-        if (!sameExp && !sameStrike) {
-          const longIsLater = (a.side === 'long' ? a : b).exp > (a.side === 'short' ? a : b).exp;
-          return `${longIsLater ? 'Long' : 'Short'} ${typ} Diagonal`;
-        }
-        if (sameExp && !sameStrike) {
-          const longK = (a.side === 'long' ? a : b).k;
-          const shortK = (a.side === 'short' ? a : b).k;
-          const isCredit = net > 0;
-          if (typ === 'Call') {
-            const bull = longK < shortK;
-            return `${bull ? 'Bull' : 'Bear'} Call ${isCredit ? 'Credit' : 'Debit'} Spread`;
-          } else {
-            const bull = shortK > longK;
-            return `${bull ? 'Bull' : 'Bear'} Put ${isCredit ? 'Credit' : 'Debit'} Spread`;
-          }
-        }
-      }
-    }
-
-    // 3 legs
-    if (Ls.length === 3) {
-      if (allSameExp && allSameType) {
-        const S = sortedByK(Ls);
-        const sgnQty = S.map(x => (x.side === 'long' ? 1 : -1) * (Number(x.qty) || 0));
-        const isButterflyLike = same(Math.abs(sgnQty[0]), Math.abs(sgnQty[2])) && same(Math.abs(sgnQty[1]), Math.abs(sgnQty[0] + sgnQty[2]));
-        if (isButterflyLike) {
-          const longWings = sgnQty[0] > 0 && sgnQty[2] > 0 && sgnQty[1] < 0;
-          const shortWings = sgnQty[0] < 0 && sgnQty[2] < 0 && sgnQty[1] > 0;
-          const wingLeft = S[1].k - S[0].k;
-          const wingRight = S[2].k - S[1].k;
-          const broken = !same(wingLeft, wingRight);
-          const typ = Ls[0].type === 'C' ? 'Call' : 'Put';
-          if (longWings) return `${broken ? 'Broken Wing ' : ''}Long ${typ} Butterfly`;
-          if (shortWings) return `${broken ? 'Broken Wing ' : ''}Short ${typ} Butterfly`;
-        }
-        const longs = bySide('long');
-        const shorts = bySide('short');
-        if ((longs.length === 1 && shorts.length === 2) || (longs.length === 2 && shorts.length === 1)) {
-          const typ = Ls[0].type === 'C' ? 'Call' : 'Put';
-          const lq = sumQty(longs);
-          const sq = sumQty(shorts);
-          const ratio = longs.length === 1 ? `${Math.round(lq)}x${Math.round(sq)}` : `${Math.round(lq)}x${Math.round(sq)}`;
-          return `Ratio ${typ} Spread (${ratio})`;
-        }
-      }
-      return 'Three‑leg Combo';
-    }
-
-    // 4 legs
-    if (Ls.length === 4) {
-      const calls = byType('C');
-      const puts = byType('P');
-      if (allSameExp) {
-        if (calls.length === 2 && puts.length === 2) {
-          // Iron Butterfly
-          const cKs = sortedByK(calls).map(x => x.k);
-          const pKs = sortedByK(puts).map(x => x.k);
-          const midK = cKs.find(k => pKs.includes(k));
-          if (midK != null) {
-            const cMid = calls.find(x => same(x.k, midK));
-            const pMid = puts.find(x => same(x.k, midK));
-            const wings = Ls.filter(x => !same(x.k, midK));
-            if (cMid && pMid && wings.length === 2) {
-              const midsShort = cMid.side === 'short' && pMid.side === 'short';
-              const midsLong = cMid.side === 'long' && pMid.side === 'long';
-              if (midsShort) return 'Short Iron Butterfly';
-              if (midsLong) return 'Long Iron Butterfly';
-            }
-          }
-          // Iron Condor
-          const c = sortedByK(calls);
-          const p = sortedByK(puts);
-          const condorShort = c[0].side === 'short' && c[1].side === 'long' && p[0].side === 'long' && p[1].side === 'short';
-          const condorLong  = c[0].side === 'long' && c[1].side === 'short' && p[0].side === 'short' && p[1].side === 'long';
-          if (condorShort) return 'Short Iron Condor';
-          if (condorLong) return 'Long Iron Condor';
-        }
-        // Same-type Condor (all Calls or all Puts)
-        if (allSameType) {
-          const S = sortedByK(Ls);
-          const wingsLong = S[0].side === 'long' && S[3].side === 'long' && S[1].side === 'short' && S[2].side === 'short';
-          const wingsShort = S[0].side === 'short' && S[3].side === 'short' && S[1].side === 'long' && S[2].side === 'long';
-          const typ = Ls[0].type === 'C' ? 'Call' : 'Put';
-          if (wingsLong) return `Long ${typ} Condor`;
-          if (wingsShort) return `Short ${typ} Condor`;
-        }
-        // Box Spread
-        if (calls.length === 2 && puts.length === 2) {
-          const kSet = Array.from(new Set(Ls.map(x => x.k))).sort((a,b)=>a-b);
-          if (kSet.length === 2) {
-            const k1 = kSet[0], k2 = kSet[1];
-            const hasLongCallK1 = calls.some(x => same(x.k, k1) && x.side === 'long');
-            const hasShortCallK2 = calls.some(x => same(x.k, k2) && x.side === 'short');
-            const hasLongPutK2 = puts.some(x => same(x.k, k2) && x.side === 'long');
-            const hasShortPutK1 = puts.some(x => same(x.k, k1) && x.side === 'short');
-            const longBox = hasLongCallK1 && hasShortCallK2 && hasLongPutK2 && hasShortPutK1;
-            const shortBox = calls.some(x => same(x.k, k1) && x.side === 'short') && calls.some(x => same(x.k, k2) && x.side === 'long') &&
-                             puts.some(x => same(x.k, k2) && x.side === 'short') && puts.some(x => same(x.k, k1) && x.side === 'long');
-            if (longBox) return 'Long Box Spread';
-            if (shortBox) return 'Short Box Spread';
-          }
-        }
-      } else {
-        // Double Calendar / Double Diagonal
-        const expSet = Array.from(new Set(Ls.map(x => x.exp))).sort();
-        if (expSet.length === 2 && calls.length === 2 && puts.length === 2) {
-          const cStrikeSame = same(calls[0].k, calls[1].k);
-          const pStrikeSame = same(puts[0].k, puts[1].k);
-          const cOppSides = calls[0].side !== calls[1].side;
-          const pOppSides = puts[0].side !== puts[1].side;
-          if (cStrikeSame && pStrikeSame && cOppSides && pOppSides) return 'Double Calendar (Straddle)';
-          if (!cStrikeSame && !pStrikeSame && cOppSides && pOppSides) return 'Double Diagonal';
-        }
-      }
-      return 'Four‑leg Combo';
-    }
-
-    if (Ls.length >= 5) return `Complex (${Ls.length} legs)`;
-    return 'Options Combo';
+    return describeStrategy(normalized, netEntryFor(active));
   };

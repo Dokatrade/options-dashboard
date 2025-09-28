@@ -1,5 +1,5 @@
 import React from 'react';
-import type { PositionLeg } from '../utils/types';
+import type { PositionLeg, CloseSnapshot } from '../utils/types';
 import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
 import { midPrice, bestBidAsk, fetchHV30 } from '../services/bybit';
 import { bsPrice, bsImpliedVol } from '../utils/bs';
@@ -16,18 +16,22 @@ function formatCreatedAtLabel(createdAt?: number): string | null {
 }
 
 type Props = {
+  id: string;
   legs: PositionLeg[];
   createdAt: number;
+  closedAt?: number;
+  closeSnapshot?: CloseSnapshot;
   note?: string;
   title?: string;
   onClose: () => void;
+  onClosePosition?: () => void;
   onToggleLegHidden?: (symbol: string) => void;
   hiddenSymbols?: string[];
   onEdit?: () => void;
   onDeleteLeg?: (legIndex: number) => void;
 };
 
-export function PositionView({ legs, createdAt, note, title, onClose, onToggleLegHidden, hiddenSymbols, onEdit, onDeleteLeg }: Props) {
+export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, note, title, onClose, onClosePosition, onToggleLegHidden, hiddenSymbols, onEdit, onDeleteLeg }: Props) {
   const positionCreatedAt = React.useMemo(() => {
     const fallback = Number.isFinite(createdAt) ? Number(createdAt) : Date.now();
     const legTimes = legs
@@ -144,6 +148,14 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
 
   // Effective time position used in calculations
   const effTimePos = isZeroDTE ? 1 : Math.max(minTimePos, Math.max(0, Math.min(1, timePos)));
+
+  const anchorWeight = React.useMemo(() => {
+    if (effTimePos <= minTimePos) return 1;
+    const denom = Math.max(1e-9, 1 - minTimePos);
+    const progress = Math.max(0, (effTimePos - minTimePos) / denom);
+    if (progress >= 0.05) return 0;
+    return 1 - (progress / 0.05);
+  }, [effTimePos, minTimePos]);
 
   React.useEffect(() => {
     const symbols = Array.from(new Set(legs.map(l => l.leg.symbol)));
@@ -486,13 +498,6 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
     const N = 120;
     for (let i = 0; i <= N; i++) xs.push(minX + (i / N) * (maxX - minX));
     const netClose = useExecPnl ? calc.netExec : calc.netMid;
-    const anchorWeight = (() => {
-      if (effTimePos <= minTimePos) return 1;
-      const denom = Math.max(1e-9, 1 - minTimePos);
-      const progress = Math.max(0, (effTimePos - minTimePos) / denom);
-      if (progress >= 0.05) return 0;
-      return 1 - (progress / 0.05);
-    })();
     const expVals = xs.map(S => valueAt(S));
     // Compute T+0 raw values separately; Y-scaling will prioritize expiry structure for clarity
     const tNow = Date.now();
@@ -632,6 +637,43 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
 
   // Screenshot functionality removed per request
 
+  const closeTimestamp = closeSnapshot?.timestamp ?? (Number.isFinite(closedAt) ? Number(closedAt) : undefined);
+
+  const alreadyExited = closeSnapshot != null || typeof closedAt === 'number';
+
+  const closeInfo = React.useMemo(() => {
+    if (!(closeTimestamp != null)) return null;
+    const dt = new Date(closeTimestamp);
+    if (Number.isNaN(dt.getTime())) return null;
+    const datePart = dt.toLocaleDateString('ru-RU');
+    const timePart = dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase();
+    const formatNum = (value: unknown) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num.toFixed(2) : '—';
+    };
+    const pnlValue = closeSnapshot?.pnlExec;
+    const pnlNum = Number(pnlValue);
+    const pnlStr = Number.isFinite(pnlNum) ? `${pnlNum >= 0 ? '+' : ''}${pnlNum.toFixed(2)}` : '—';
+    const pnlStyle = Number.isFinite(pnlNum)
+      ? (pnlNum > 0 ? { color: 'var(--gain)' } : (pnlNum < 0 ? { color: 'var(--loss)' } : undefined))
+      : undefined;
+    return {
+      datePart,
+      timePart,
+      index: formatNum(closeSnapshot?.indexPrice),
+      spot: formatNum(closeSnapshot?.spotPrice),
+      pnlStr,
+      pnlStyle,
+    };
+  }, [closeTimestamp, closeSnapshot]);
+
+  const canClosePosition = typeof onClosePosition === 'function' && !alreadyExited;
+
+  const handleClosePosition = React.useCallback(() => {
+    if (!canClosePosition || !onClosePosition) return;
+    if (window.confirm('Exit this item?')) onClosePosition();
+  }, [canClosePosition, onClosePosition]);
+
   return (
     <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.45)', zIndex:70}}>
       <div
@@ -643,6 +685,7 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
           background:'var(--card)', color:'var(--fg)', border:'1px solid var(--border)', borderRadius:12,
           width:900, maxWidth:'95%', maxHeight:'90%', overflow:'auto', overscrollBehavior:'contain', boxShadow:'0 10px 24px rgba(0,0,0,.35)'
         }}
+        data-position-id={id}
       >
         <div
           style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 16px', borderBottom:'1px solid var(--border)', cursor:'move', userSelect: draggingRef.current ? 'none' as const : undefined}}
@@ -654,9 +697,22 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
             document.body.style.cursor = 'grabbing';
           }}
         >
-          <strong>{title || 'Position View'}</strong>
-          <div style={{display:'flex', gap:8}}>
-            <button className="ghost" onClick={onClose}>Close</button>
+          <div style={{display:'flex', alignItems:'center', gap:12, flexWrap:'wrap'}}>
+            <strong>{title || 'Position View'}</strong>
+            {closeInfo && (
+              <span className="muted" style={{fontSize:'0.85em', display:'inline-flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
+                <span>{`Closed ${closeInfo.datePart} ${closeInfo.timePart}`}</span>
+                <span>| Index {closeInfo.index}</span>
+                <span>| Spot {closeInfo.spot}</span>
+                <span style={closeInfo.pnlStyle ?? undefined}>| PNLexec {closeInfo.pnlStr}</span>
+              </span>
+            )}
+          </div>
+          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+            {canClosePosition && (
+              <button className="ghost" onClick={handleClosePosition}>Exit</button>
+            )}
+            <button className="ghost" onClick={onClose} aria-label="Close view">Close</button>
           </div>
         </div>
         <div style={{padding:12}}>
@@ -753,12 +809,6 @@ export function PositionView({ legs, createdAt, note, title, onClose, onToggleLe
                      const netClose = useExecPnl ? calc.netExec : calc.netMid;
                      const actualPnL0 = calc.netEntry - netClose;
                      if (isFinite(modelPnL0) && isFinite(actualPnL0)) {
-                       const futureProgress = (() => {
-                         if (effTimePos <= minTimePos) return 0;
-                         const denom = Math.max(1e-9, 1 - minTimePos);
-                         return Math.min(1, (effTimePos - minTimePos) / denom);
-                       })();
-                       const anchorWeight = 1 - futureProgress;
                        offset = (actualPnL0 - modelPnL0) * anchorWeight;
                      }
                    }

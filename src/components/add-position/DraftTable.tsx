@@ -7,6 +7,7 @@ type DraftTableProps = {
   tickers: Record<string, any>;
   canSaveAsVertical: boolean;
   totalCreditPer: number;
+  strategyLabel: string;
   onRemoveLeg: (index: number) => void;
   onUpdateQty: (index: number, qty: number) => void;
   onClearDraft: () => void;
@@ -23,6 +24,7 @@ export function DraftTable({
   tickers,
   canSaveAsVertical,
   totalCreditPer,
+  strategyLabel,
   onRemoveLeg,
   onUpdateQty,
   onClearDraft,
@@ -34,7 +36,11 @@ export function DraftTable({
       <div className="draft-panel__header">
         <div>
           <div className="muted">Position builder</div>
-          {draft.length === 0 && <div className="muted">No legs added yet.</div>}
+          {draft.length === 0 ? (
+            <div className="muted">No legs added yet.</div>
+          ) : (
+            <div className="draft-panel__strategy">{strategyLabel || 'Custom Strategy'}</div>
+          )}
         </div>
         <button type="button" className="ghost" onClick={onClearDraft} disabled={!draft.length}>Clear draft</button>
       </div>

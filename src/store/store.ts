@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { SpreadPosition, PortfolioSettings, Position } from '../utils/types';
+import type { SpreadPosition, PortfolioSettings, Position, CloseSnapshot } from '../utils/types';
 import { ensureUsdtSymbol } from '../utils/symbols';
 
 type State = {
@@ -9,8 +9,8 @@ type State = {
   settings: PortfolioSettings;
   addSpread: (s: Omit<SpreadPosition, 'id' | 'createdAt' | 'closedAt'>) => void;
   addPosition: (p: Omit<Position, 'id' | 'createdAt' | 'closedAt'>) => void;
-  markClosed: (id: string) => void;
-  closePosition: (id: string) => void;
+  markClosed: (id: string, snapshot?: CloseSnapshot) => void;
+  closePosition: (id: string, snapshot?: CloseSnapshot) => void;
   remove: (id: string) => void;
   removePosition: (id: string) => void;
   updateSpread: (id: string, updater: (s: SpreadPosition) => SpreadPosition) => void;
@@ -39,6 +39,38 @@ function normalizeSettlementsMap(raw: any) {
     }] as const;
   }).filter(Boolean) as Array<[string, { settleUnderlying: number; settledAt: number }]>;
   return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function toNumber(value: unknown): number | undefined {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : undefined;
+}
+
+function normalizeCloseSnapshot(raw: any, fallbackTimestamp: number): CloseSnapshot | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const ts = toNumber((raw as any)?.timestamp ?? (raw as any)?.closedAt ?? (raw as any)?.time);
+  const timestamp = ts ?? fallbackTimestamp;
+  const indexPrice = toNumber((raw as any)?.indexPrice ?? (raw as any)?.index);
+  const spotPrice = toNumber((raw as any)?.spotPrice ?? (raw as any)?.spot);
+  const pnlExec = toNumber((raw as any)?.pnlExec ?? (raw as any)?.pnl);
+  const snapshot: CloseSnapshot = { timestamp };
+  if (indexPrice != null) snapshot.indexPrice = indexPrice;
+  if (spotPrice != null) snapshot.spotPrice = spotPrice;
+  if (pnlExec != null) snapshot.pnlExec = pnlExec;
+  return snapshot;
+}
+
+function sanitizeSnapshot(snapshot?: CloseSnapshot): CloseSnapshot | undefined {
+  if (!snapshot) return undefined;
+  const timestamp = toNumber(snapshot.timestamp) ?? Date.now();
+  const sanitized: CloseSnapshot = { timestamp };
+  const indexPrice = toNumber(snapshot.indexPrice);
+  if (indexPrice != null) sanitized.indexPrice = indexPrice;
+  const spotPrice = toNumber(snapshot.spotPrice);
+  if (spotPrice != null) sanitized.spotPrice = spotPrice;
+  const pnlExec = toNumber(snapshot.pnlExec);
+  if (pnlExec != null) sanitized.pnlExec = pnlExec;
+  return sanitized;
 }
 
 export const useStore = create<State>()(
@@ -82,11 +114,23 @@ export const useStore = create<State>()(
           ]
         };
       }),
-      markClosed: (id) => set((st) => ({
-        spreads: st.spreads.map((p) => (p.id === id ? { ...p, closedAt: Date.now() } : p))
+      markClosed: (id, snapshot) => set((st) => ({
+        spreads: st.spreads.map((p) => {
+          if (p.id !== id) return p;
+          const sanitized = sanitizeSnapshot(snapshot);
+          if (sanitized) return { ...p, closedAt: sanitized.timestamp, closeSnapshot: sanitized };
+          if (p.closedAt) return p;
+          return { ...p, closedAt: Date.now() };
+        })
       })),
-      closePosition: (id) => set((st) => ({
-        positions: st.positions.map((p) => (p.id === id ? { ...p, closedAt: Date.now() } : p))
+      closePosition: (id, snapshot) => set((st) => ({
+        positions: st.positions.map((p) => {
+          if (p.id !== id) return p;
+          const sanitized = sanitizeSnapshot(snapshot);
+          if (sanitized) return { ...p, closedAt: sanitized.timestamp, closeSnapshot: sanitized };
+          if (p.closedAt) return p;
+          return { ...p, closedAt: Date.now() };
+        })
       })),
       remove: (id) => set((st) => ({ spreads: st.spreads.filter((p) => p.id !== id) })),
       removePosition: (id) => set((st) => ({ positions: st.positions.filter((p) => p.id !== id) })),
@@ -164,6 +208,7 @@ export const useStore = create<State>()(
             const id = typeof p?.id === 'string' ? p.id : (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2));
             const createdAt = Number(p?.createdAt) || Date.now();
             const closedAt = p?.closedAt != null ? Number(p.closedAt) : undefined;
+            const closeSnapshot = normalizeCloseSnapshot(p?.closeSnapshot, closedAt ?? createdAt);
             const cEnter = Number(p?.cEnter) || 0;
             const qty = Number(p?.qty) > 0 ? Number(p.qty) : 1;
             const entryShort = p?.entryShort != null ? Number(p.entryShort) : undefined;
@@ -174,6 +219,7 @@ export const useStore = create<State>()(
               id,
               createdAt,
               closedAt,
+              closeSnapshot,
               cEnter,
               entryShort,
               entryLong,
@@ -231,10 +277,12 @@ export const useStore = create<State>()(
               .map((leg: any) => Number(leg?.createdAt))
               .filter((v: number) => Number.isFinite(v));
             const posCreatedAt = legTimes.length ? Math.min(...legTimes) : createdAt;
+            const closeSnapshot = normalizeCloseSnapshot(p?.closeSnapshot, closedAt ?? posCreatedAt);
             return {
               id,
               createdAt: posCreatedAt,
               closedAt,
+              closeSnapshot,
               note,
               legs,
               favorite: typeof p?.favorite === 'boolean' ? p.favorite : undefined,

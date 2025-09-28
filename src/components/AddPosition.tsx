@@ -10,6 +10,10 @@ import { OptionChainTable } from './add-position/OptionChainTable';
 import { SelectionPanel } from './add-position/SelectionPanel';
 import { DraftTable } from './add-position/DraftTable';
 import type { ChainRow, DraftLeg } from './add-position/types';
+import { describeStrategy, type StrategyLeg } from '../utils/strategyDetection';
+
+const MONTH_CODES = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'] as const;
+const MONTH_INDEX: Record<string, number> = MONTH_CODES.reduce((acc, code, idx) => ({ ...acc, [code]: idx }), {} as Record<string, number>);
 
 export function AddPosition() {
   const addSpread = useStore((s) => s.addSpread);
@@ -71,18 +75,26 @@ export function AddPosition() {
 
   React.useEffect(() => () => { mountedRef.current = false; }, []);
 
-  React.useEffect(() => {
-    let mounted = true;
+  const refreshInstruments = React.useCallback(async () => {
+    if (!mountedRef.current) return;
     setLoading(true);
-    fetchInstruments()
-      .then((list) => {
-        if (!mounted) return;
-        const onlyActive = list.filter((i) => i.deliveryTime > Date.now() && isFinite(i.strike));
-        setInstruments(onlyActive);
-      })
-      .finally(() => setLoading(false));
-    return () => { mounted = false; };
+    try {
+      const list = await fetchInstruments();
+      if (!mountedRef.current) return;
+      const active = list.filter((i) => i.deliveryTime > Date.now() && isFinite(i.strike));
+      setInstruments(active);
+    } finally {
+      if (mountedRef.current) setLoading(false);
+    }
   }, []);
+
+  React.useEffect(() => {
+    refreshInstruments().catch(() => {});
+    const interval = setInterval(() => {
+      refreshInstruments().catch(() => {});
+    }, slowMode ? 10 * 60 * 1000 : 3 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [refreshInstruments, slowMode]);
 
   React.useEffect(() => {
     chainRef.current = chain;
@@ -93,41 +105,74 @@ export function AddPosition() {
   }, [draft]);
 
   React.useEffect(() => {
-    const monthCodes = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
     const expiryCode = (ms: number): string => {
       const d = new Date(ms);
       const dd = String(d.getUTCDate()).padStart(2, '0');
-      const m = monthCodes[d.getUTCMonth()];
+      const m = MONTH_CODES[d.getUTCMonth()];
       const yy = String(d.getUTCFullYear() % 100).padStart(2, '0');
       return `${dd}${m}${yy}`;
     };
+    const parseSymbol = (raw: string) => {
+      const upper = raw.toUpperCase();
+      const parts = upper.split('-');
+      if (parts.length < 3) return null;
+      const code = parts[1];
+      let strike: number | undefined;
+      let typeChar: OptionType | undefined;
+      for (let i = 2; i < parts.length; i++) {
+        const part = parts[i];
+        if (!typeChar && (part === 'C' || part === 'P' || part.startsWith('C') || part.startsWith('P'))) {
+          typeChar = part.charAt(0) as OptionType;
+          continue;
+        }
+        if (!strike) {
+          const numeric = Number(part.replace(/[^0-9.]/g, ''));
+          if (Number.isFinite(numeric)) strike = numeric;
+        }
+      }
+      if (!typeChar || !Number.isFinite(strike)) return null;
+      return { code, strike: strike!, type: typeChar };
+    };
     const mk = (exp: number | '', type: OptionType) => {
       if (!exp) return [] as InstrumentInfo[];
-      const base = instruments
+      const map = new Map<string, InstrumentInfo>();
+      instruments
         .filter((i) => i.deliveryTime === exp && i.optionType === type)
-        .sort((a, b) => a.strike - b.strike);
-      // Union with tickers-derived symbols for this expiry if any are missing (Bybit occasionally skips items in instruments-info)
-      try {
-        const code = expiryCode(exp as number);
-        const seen = new Set(base.map(i => i.symbol));
-        const extras: InstrumentInfo[] = [];
-        Object.keys(tickers || {}).forEach(sym => {
-          if (!sym.includes(`-${code}-`)) return;
-          const parts = sym.split('-');
-          const optPart = (parts?.[3] || '').toUpperCase();
-          if (!optPart.startsWith(type)) return;
-          if (seen.has(sym)) return;
-          const strike = Number(parts?.[2]);
-          if (!Number.isFinite(strike)) return;
-          const settleCoin = parts?.[4] ? parts[4].toUpperCase() : 'USDT';
-          extras.push({ symbol: ensureUsdtSymbol(sym), strike, optionType: type, deliveryTime: exp as number, settleCoin });
+        .forEach((i) => {
+          const key = ensureUsdtSymbol(i.symbol);
+          map.set(key, { ...i, symbol: key });
         });
-        if (extras.length) {
-          const merged = [...base, ...extras].sort((a,b)=>a.strike - b.strike);
-          return merged;
+
+      const code = expiryCode(exp as number);
+      const tolerance = 12 * 60 * 60 * 1000; // 12h tolerance for API rounding
+
+      Object.entries(tickers || {}).forEach(([sym, ticker]) => {
+        const parsed = parseSymbol(sym);
+        if (!parsed || parsed.type !== type) return;
+
+        let expiryMs = Number((ticker as any)?.deliveryTime ?? (ticker as any)?.expiryDate);
+        if (!Number.isFinite(expiryMs)) {
+          const parsedCodeMs = parseExpiryCode(parsed.code);
+          expiryMs = parsedCodeMs ?? NaN;
         }
-      } catch {}
-      return base;
+        if (!Number.isFinite(expiryMs)) return;
+        const expiryCandidate = Number(expiryMs);
+
+        if (Math.abs(expiryCandidate - (exp as number)) > tolerance && parsed.code !== code) return;
+
+        const normalized = ensureUsdtSymbol(sym);
+        if (!map.has(normalized)) {
+          map.set(normalized, {
+            symbol: normalized,
+            strike: parsed.strike,
+            optionType: type,
+            deliveryTime: expiryCandidate || (exp as number),
+            settleCoin: 'USDT',
+          });
+        }
+      });
+
+      return Array.from(map.values()).sort((a, b) => a.strike - b.strike);
     };
     setChain(mk(expiry, optType));
   }, [expiry, instruments, optType, tickers]);
@@ -316,7 +361,67 @@ export function AddPosition() {
     return () => { unsubs.forEach(u => u()); };
   }, [chain, draft, slowMode]);
 
-  const expiries = Array.from(new Set(instruments.filter(i => i.optionType === optType).map(i => i.deliveryTime))).sort((a, b) => a - b);
+  const parseExpiryCode = React.useCallback((raw: string): number | undefined => {
+    if (!raw) return undefined;
+    const upper = raw.toUpperCase();
+    const dayPart2 = upper.slice(0, 2);
+    let day = Number(dayPart2);
+    let monthStart = 2;
+    if (!Number.isFinite(day)) {
+      day = Number(upper.slice(0, 1));
+      monthStart = 1;
+    }
+    const monthCode = upper.slice(monthStart, monthStart + 3);
+    const mon = MONTH_INDEX[monthCode];
+    const yearPart = upper.slice(monthStart + 3, monthStart + 5);
+    const year = Number(yearPart);
+    if (!Number.isFinite(day) || !Number.isFinite(year) || mon == null) return undefined;
+    const fullYear = 2000 + year;
+    const ms = Date.UTC(fullYear, mon, day, 8, 0, 0, 0);
+    return Number.isFinite(ms) ? ms : undefined;
+  }, []);
+
+  const inferTypeChar = React.useCallback((segments: string[]): OptionType | undefined => {
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const raw = segments[i];
+      if (!raw) continue;
+      const seg = raw.toUpperCase();
+      if (!seg) continue;
+      if (seg === 'C' || seg === 'CALL' || seg.startsWith('C-')) return 'C';
+      if (seg === 'P' || seg === 'PUT' || seg.startsWith('P-')) return 'P';
+      if (seg === 'USDT' || seg === 'USD' || /^[0-9.]+$/.test(seg)) continue;
+      const head = seg.charAt(0);
+      if (head === 'C' || head === 'P') return head as OptionType;
+    }
+    return undefined;
+  }, []);
+
+  const expiries = React.useMemo(() => {
+    const set = new Set<number>();
+    draft
+      .filter((d) => d.leg.optionType === optType && Number.isFinite(d.leg.expiryMs))
+      .forEach((d) => set.add(Number(d.leg.expiryMs)));
+    instruments
+      .filter((i) => i.optionType === optType && Number.isFinite(i.deliveryTime))
+      .forEach((i) => set.add(Number(i.deliveryTime)));
+    Object.keys(tickers || {}).forEach((sym) => {
+      if (!sym.includes('-')) return;
+      const parts = sym.split('-');
+      if (parts.length < 3) return;
+      const code = parts[1];
+      const typeChar = inferTypeChar(parts.slice(2));
+      if (typeChar && typeChar !== optType) return;
+      const ticker = tickers[sym];
+      const expMs = Number((ticker as any)?.expiryDate ?? (ticker as any)?.deliveryTime);
+      if (Number.isFinite(expMs) && expMs > 0) {
+        set.add(expMs);
+        return;
+      }
+      const ms = parseExpiryCode(code);
+      if (ms) set.add(ms);
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [draft, inferTypeChar, instruments, tickers, optType, parseExpiryCode]);
   const filteredChain = React.useMemo(() => {
     if (showAllStrikes) return chain;
     return chain.filter((i) => {
@@ -490,6 +595,21 @@ export function AddPosition() {
     }, 0);
   }, [draft, tickers]);
 
+  const strategyLabel = React.useMemo(() => {
+    if (!draft.length) return '';
+    const legs: StrategyLeg[] = draft.map((d) => ({
+      side: d.side,
+      type: d.leg.optionType,
+      expiryMs: Number(d.leg.expiryMs) || 0,
+      strike: Number(d.leg.strike) || 0,
+      qty: Number(d.qty) || 0,
+      symbol: String(d.leg.symbol || ''),
+      isUnderlying: !String(d.leg.symbol || '').includes('-') || Number(d.leg.expiryMs) <= 0,
+    }));
+    const label = describeStrategy(legs, totalCreditPer);
+    return label === '—' ? '' : label;
+  }, [draft, totalCreditPer]);
+
   const canSaveAsVertical = React.useMemo(() => {
     if (draft.length !== 2) return false;
     const [a, b] = draft;
@@ -595,6 +715,7 @@ export function AddPosition() {
             tickers={tickers}
             canSaveAsVertical={canSaveAsVertical}
             totalCreditPer={totalCreditPer}
+            strategyLabel={strategyLabel}
             onRemoveLeg={removeLeg}
             onUpdateQty={updateDraftQty}
             onClearDraft={clearDraft}
