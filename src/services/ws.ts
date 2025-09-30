@@ -131,6 +131,7 @@ function subscribe(url: string, symbol: string, cb: Cb): () => void {
 
 const WS_OPTION = 'wss://stream.bybit.com/v5/public/option';
 const WS_SPOT = 'wss://stream.bybit.com/v5/public/spot';
+const WS_LINEAR = 'wss://stream.bybit.com/v5/public/linear';
 
 export function subscribeOptionTicker(symbol: string, cb: Cb) {
   return subscribe(WS_OPTION, symbol, cb);
@@ -138,6 +139,10 @@ export function subscribeOptionTicker(symbol: string, cb: Cb) {
 
 export function subscribeSpotTicker(symbol: string, cb: Cb) {
   return subscribe(WS_SPOT, symbol, cb);
+}
+
+export function subscribeLinearTicker(symbol: string, cb: Cb) {
+  return subscribe(WS_LINEAR, symbol, cb);
 }
 
 // Backward compatibility alias (options)

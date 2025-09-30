@@ -1,8 +1,9 @@
 import React from 'react';
 import type { PositionLeg, CloseSnapshot } from '../utils/types';
-import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
+import { subscribeLinearTicker, subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
 import { midPrice, bestBidAsk, fetchHV30 } from '../services/bybit';
 import { bsPrice, bsImpliedVol } from '../utils/bs';
+import { inferUnderlyingSpotSymbol } from '../utils/underlying';
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -55,6 +56,7 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
   const [timePos, setTimePos] = React.useState(0); // 0..1 (today -> expiry)
   const [clock, setClock] = React.useState(0); // timer to refresh min allowed time
   const [hv30, setHv30] = React.useState<number | undefined>();
+  const [linearIndex, setLinearIndex] = React.useState<Record<string, number>>({});
   const [graphHover, setGraphHover] = React.useState(false);
   const [xZoom, setXZoom] = React.useState(1); // default: show exactly ±50% around spot at open
   const [yZoom, setYZoom] = React.useState(1);
@@ -167,6 +169,24 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
     return () => { unsubs.forEach(u => u()); };
   }, [legsCalc]);
 
+  React.useEffect(() => {
+    const symbols = Array.from(new Set(legsCalc
+      .map(l => inferUnderlyingSpotSymbol(l.leg.symbol))
+      .filter((sym): sym is string => Boolean(sym))));
+    if (!symbols.length) return undefined;
+    const unsubs = symbols.slice(0, 50).map(sym => subscribeLinearTicker(sym, (t) => {
+      const raw = t?.indexPrice;
+      if (raw == null) return;
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value <= 0) return;
+      setLinearIndex(prev => {
+        if (prev[sym] === value) return prev;
+        return { ...prev, [sym]: value };
+      });
+    }));
+    return () => { unsubs.forEach(u => u()); };
+  }, [legsCalc]);
+
   // Ensure wheel inside SVG never scrolls page (native listener, passive: false)
   React.useEffect(() => {
     const el = svgRef.current;
@@ -246,6 +266,18 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
 
 
   const calc = React.useMemo(() => {
+    const underlyingSpotSymbols = Array.from(new Set(legsCalc
+      .map((L) => inferUnderlyingSpotSymbol(L.leg.symbol))
+      .filter((sym): sym is string => Boolean(sym))));
+    const preferredLinearSpot = (() => {
+      for (const sym of underlyingSpotSymbols) {
+        const raw = linearIndex[sym];
+        if (raw == null) continue;
+        const val = Number(raw);
+        if (Number.isFinite(val) && val > 0) return val;
+      }
+      return undefined;
+    })();
     const spotCandidates: number[] = [];
     const perpEntryCandidates: number[] = [];
     const strikeCandidates: number[] = [];
@@ -317,6 +349,7 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
     const dteLabel = dtes.length ? (dtes.length === 1 ? `${dtes[0]}d` : `${Math.min(...dtes)}–${Math.max(...dtes)}d`) : '—';
     // Spot proxy from any leg's indexPrice
     const spot = (() => {
+      if (preferredLinearSpot != null) return preferredLinearSpot;
       for (const candidate of spotCandidates) {
         if (Number.isFinite(candidate) && candidate > 0) return candidate;
       }
@@ -331,6 +364,7 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
       return undefined;
     })();
     const priceHint = (() => {
+      if (preferredLinearSpot != null) return preferredLinearSpot;
       if (spot != null && Number.isFinite(spot) && spot > 0) return spot;
       if (perpEntryCandidates.length) {
         const sum = perpEntryCandidates.reduce((acc, v) => acc + v, 0);
@@ -343,7 +377,7 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
       return undefined;
     })();
     return { det, netEntry, netMid, netExec, pnl, pnlExec, greeks, dteLabel, spot, priceHint };
-  }, [legs, tickers]);
+  }, [legsCalc, linearIndex, tickers]);
 
   const netPnlValue = useExecPnl ? calc.pnlExec : calc.pnl;
 
