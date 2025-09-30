@@ -21,6 +21,7 @@ type State = {
   toggleFavoritePosition: (id: string) => void;
   setSpreadSettlement: (id: string, expiryMs: number, settleUnderlying?: number) => void;
   setPositionSettlement: (id: string, expiryMs: number, settleUnderlying?: number) => void;
+  clearRealizedHistory: () => void;
 };
 
 function normalizeLegSymbol<T extends { symbol: string }>(leg: T): T {
@@ -198,6 +199,10 @@ export const useStore = create<State>()(
             }
           };
         })
+      })),
+      clearRealizedHistory: () => set((st) => ({
+        spreads: st.spreads.map((p) => ({ ...p, closeSnapshot: undefined })),
+        positions: st.positions.map((p) => ({ ...p, closeSnapshot: undefined })),
       })),
       importState: (data) => {
         try {
