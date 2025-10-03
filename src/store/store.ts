@@ -3,10 +3,21 @@ import { persist } from 'zustand/middleware';
 import type { SpreadPosition, PortfolioSettings, Position, CloseSnapshot } from '../utils/types';
 import { ensureUsdtSymbol } from '../utils/symbols';
 
+export const DEFAULT_PORTFOLIO_ID = 'default';
+
+type PortfolioMeta = {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 type State = {
   spreads: SpreadPosition[];
   positions: Position[];
   settings: PortfolioSettings;
+  portfolios: PortfolioMeta[];
+  activePortfolioId: string;
   addSpread: (s: Omit<SpreadPosition, 'id' | 'createdAt' | 'closedAt'>) => void;
   addPosition: (p: Omit<Position, 'id' | 'createdAt' | 'closedAt'>) => void;
   markClosed: (id: string, snapshot?: CloseSnapshot) => void;
@@ -17,12 +28,16 @@ type State = {
   updatePosition: (id: string, updater: (p: Position) => Position) => void;
   setDeposit: (v: number) => void;
   setRiskLimitPct: (v: number | undefined) => void;
-  importState: (data: { spreads?: any[]; positions?: any[]; settings?: Partial<PortfolioSettings> }) => { ok: boolean; error?: string };
+  importState: (data: { spreads?: any[]; positions?: any[]; settings?: Partial<PortfolioSettings>; portfolios?: any[]; activePortfolioId?: string }) => { ok: boolean; error?: string };
   toggleFavoriteSpread: (id: string) => void;
   toggleFavoritePosition: (id: string) => void;
   setSpreadSettlement: (id: string, expiryMs: number, settleUnderlying?: number) => void;
   setPositionSettlement: (id: string, expiryMs: number, settleUnderlying?: number) => void;
   clearRealizedHistory: () => void;
+  createPortfolio: (name: string) => string | null;
+  setActivePortfolio: (id: string) => void;
+  deletePortfolio: (id: string) => void;
+  renamePortfolio: (id: string, name: string) => void;
 };
 
 function normalizeLegSymbol<T extends { symbol: string }>(leg: T): T {
@@ -75,23 +90,48 @@ function sanitizeSnapshot(snapshot?: CloseSnapshot): CloseSnapshot | undefined {
   return sanitized;
 }
 
+const makePortfolioMeta = (id: string, name: string): PortfolioMeta => {
+  const ts = Date.now();
+  return { id, name: name.trim() || 'Portfolio', createdAt: ts, updatedAt: ts };
+};
+
+const ensurePortfolioExists = (portfolios: PortfolioMeta[], id: string): boolean => portfolios.some((p) => p.id === id);
+
+const resolvePortfolioId = (candidate: string | undefined, state: Pick<State, 'activePortfolioId' | 'portfolios'>): string => {
+  if (candidate && ensurePortfolioExists(state.portfolios, candidate)) return candidate;
+  if (ensurePortfolioExists(state.portfolios, state.activePortfolioId)) return state.activePortfolioId;
+  return DEFAULT_PORTFOLIO_ID;
+};
+
+const touchPortfolio = (portfolios: PortfolioMeta[], id: string): PortfolioMeta[] => {
+  const ts = Date.now();
+  return portfolios.map((p) => (p.id === id ? { ...p, updatedAt: ts } : p));
+};
+
 export const useStore = create<State>()(
   persist(
-    (set, get) => ({
+    (set, _get) => ({
       spreads: [],
       positions: [],
       settings: { depositUsd: 5000, riskLimitPct: undefined },
-      addSpread: (s) => set((st) => ({
-        spreads: [
-          {
-            id: crypto.randomUUID(),
-            createdAt: Date.now(),
-            ...s
-          },
-          ...st.spreads
-        ]
-      })),
+      portfolios: [makePortfolioMeta(DEFAULT_PORTFOLIO_ID, 'Default')],
+      activePortfolioId: DEFAULT_PORTFOLIO_ID,
+      addSpread: (s) => set((st) => {
+        const portfolioId = resolvePortfolioId((s as any)?.portfolioId, st);
+        const createdAt = Date.now();
+        const spread: SpreadPosition = {
+          id: crypto.randomUUID(),
+          createdAt,
+          ...s,
+          portfolioId,
+        };
+        return {
+          spreads: [spread, ...st.spreads],
+          portfolios: touchPortfolio(st.portfolios, portfolioId),
+        };
+      }),
       addPosition: (p) => set((st) => {
+        const portfolioId = resolvePortfolioId((p as any)?.portfolioId, st);
         const baseCreatedRaw = Number((p as any)?.createdAt);
         const baseCreatedAt = Number.isFinite(baseCreatedRaw) ? baseCreatedRaw : Date.now();
         let legOffset = 0;
@@ -104,41 +144,83 @@ export const useStore = create<State>()(
           .map((leg) => Number(leg.createdAt))
           .filter((v): v is number => Number.isFinite(v));
         const createdAt = legsTimes.length ? Math.min(...legsTimes) : baseCreatedAt;
+        const position: Position = {
+          id: crypto.randomUUID(),
+          createdAt,
+          ...p,
+          legs,
+          portfolioId,
+        };
         return {
-          positions: [
-            {
-              id: crypto.randomUUID(),
-              createdAt,
-              ...p,
-              legs,
-            },
-            ...st.positions
-          ]
+          positions: [position, ...st.positions],
+          portfolios: touchPortfolio(st.portfolios, portfolioId),
         };
       }),
-      markClosed: (id, snapshot) => set((st) => ({
-        spreads: st.spreads.map((p) => {
+      markClosed: (id, snapshot) => set((st) => {
+        let targetPortfolio: string | null = null;
+        const spreads = st.spreads.map((p) => {
           if (p.id !== id) return p;
+          targetPortfolio = p.portfolioId ?? DEFAULT_PORTFOLIO_ID;
           const sanitized = sanitizeSnapshot(snapshot);
           if (sanitized) return { ...p, closedAt: sanitized.timestamp, closeSnapshot: sanitized };
           if (p.closedAt) return p;
           return { ...p, closedAt: Date.now() };
-        })
-      })),
-      closePosition: (id, snapshot) => set((st) => ({
-        positions: st.positions.map((p) => {
+        });
+        return {
+          spreads,
+          portfolios: targetPortfolio ? touchPortfolio(st.portfolios, targetPortfolio) : st.portfolios,
+        };
+      }),
+      closePosition: (id, snapshot) => set((st) => {
+        let targetPortfolio: string | null = null;
+        const positions = st.positions.map((p) => {
           if (p.id !== id) return p;
+          targetPortfolio = p.portfolioId ?? DEFAULT_PORTFOLIO_ID;
           const sanitized = sanitizeSnapshot(snapshot);
           if (sanitized) return { ...p, closedAt: sanitized.timestamp, closeSnapshot: sanitized };
           if (p.closedAt) return p;
           return { ...p, closedAt: Date.now() };
-        })
-      })),
-      remove: (id) => set((st) => ({ spreads: st.spreads.filter((p) => p.id !== id) })),
-      removePosition: (id) => set((st) => ({ positions: st.positions.filter((p) => p.id !== id) })),
-      updateSpread: (id, updater) => set((st) => ({ spreads: st.spreads.map((p) => (p.id === id ? updater(p) : p)) })),
-      updatePosition: (id, updater) => set((st) => ({
-        positions: st.positions.map((p) => {
+        });
+        return {
+          positions,
+          portfolios: targetPortfolio ? touchPortfolio(st.portfolios, targetPortfolio) : st.portfolios,
+        };
+      }),
+      remove: (id) => set((st) => {
+        const target = st.spreads.find((p) => p.id === id);
+        const spreads = st.spreads.filter((p) => p.id !== id);
+        return {
+          spreads,
+          portfolios: target ? touchPortfolio(st.portfolios, target.portfolioId ?? DEFAULT_PORTFOLIO_ID) : st.portfolios,
+        };
+      }),
+      removePosition: (id) => set((st) => {
+        const target = st.positions.find((p) => p.id === id);
+        const positions = st.positions.filter((p) => p.id !== id);
+        return {
+          positions,
+          portfolios: target ? touchPortfolio(st.portfolios, target.portfolioId ?? DEFAULT_PORTFOLIO_ID) : st.portfolios,
+        };
+      }),
+      updateSpread: (id, updater) => set((st) => {
+        let touched: string | null = null;
+        const spreads = st.spreads.map((p) => {
+          if (p.id !== id) return p;
+          const updated = updater(p);
+          if (!updated) return p;
+          const candidate = (updated as SpreadPosition)?.portfolioId ?? p.portfolioId;
+          const portfolioId = resolvePortfolioId(candidate, st);
+          touched = portfolioId;
+          return { ...updated, portfolioId } as SpreadPosition;
+        });
+        return {
+          spreads,
+          portfolios: touched ? touchPortfolio(st.portfolios, touched) : st.portfolios,
+        };
+      }),
+      updatePosition: (id, updater) => set((st) => {
+        let touched: string | null = null;
+        const positions = st.positions.map((p) => {
           if (p.id !== id) return p;
           const updated = updater(p);
           if (!updated) return p;
@@ -155,16 +237,47 @@ export const useStore = create<State>()(
             .map((leg) => Number(leg.createdAt))
             .filter((v): v is number => Number.isFinite(v));
           const createdAt = legsTimes.length ? Math.min(...legsTimes) : baseCreatedAt;
-          return { ...updated, createdAt, legs };
-        })
-      })),
+          const candidate = (updated as Position)?.portfolioId ?? p.portfolioId;
+          const portfolioId = resolvePortfolioId(candidate, st);
+          touched = portfolioId;
+          return { ...updated, createdAt, legs, portfolioId } as Position;
+        });
+        return {
+          positions,
+          portfolios: touched ? touchPortfolio(st.portfolios, touched) : st.portfolios,
+        };
+      }),
       setDeposit: (v) => set((st) => ({ settings: { ...st.settings, depositUsd: v } })),
       setRiskLimitPct: (v) => set((st) => ({ settings: { ...st.settings, riskLimitPct: v != null && Number.isFinite(v) && v >= 0 ? Number(v) : undefined } })),
-      toggleFavoriteSpread: (id) => set((st) => ({ spreads: st.spreads.map((p) => (p.id === id ? { ...p, favorite: !p.favorite } : p)) })),
-      toggleFavoritePosition: (id) => set((st) => ({ positions: st.positions.map((p) => (p.id === id ? { ...p, favorite: !p.favorite } : p)) })),
-      setSpreadSettlement: (id, expiryMs, settleUnderlying) => set((st) => ({
-        spreads: st.spreads.map((p) => {
+      toggleFavoriteSpread: (id) => set((st) => {
+        let touched: string | null = null;
+        const spreads = st.spreads.map((p) => {
           if (p.id !== id) return p;
+          touched = p.portfolioId ?? DEFAULT_PORTFOLIO_ID;
+          return { ...p, favorite: !p.favorite };
+        });
+        return {
+          spreads,
+          portfolios: touched ? touchPortfolio(st.portfolios, touched) : st.portfolios,
+        };
+      }),
+      toggleFavoritePosition: (id) => set((st) => {
+        let touched: string | null = null;
+        const positions = st.positions.map((p) => {
+          if (p.id !== id) return p;
+          touched = p.portfolioId ?? DEFAULT_PORTFOLIO_ID;
+          return { ...p, favorite: !p.favorite };
+        });
+        return {
+          positions,
+          portfolios: touched ? touchPortfolio(st.portfolios, touched) : st.portfolios,
+        };
+      }),
+      setSpreadSettlement: (id, expiryMs, settleUnderlying) => set((st) => {
+        let touched: string | null = null;
+        const spreads = st.spreads.map((p) => {
+          if (p.id !== id) return p;
+          touched = p.portfolioId ?? DEFAULT_PORTFOLIO_ID;
           const key = String(expiryMs);
           const existing = p.settlements ?? {};
           if (!(settleUnderlying != null && Number.isFinite(settleUnderlying) && settleUnderlying > 0)) {
@@ -180,11 +293,17 @@ export const useStore = create<State>()(
               [key]: { settleUnderlying, settledAt: Date.now() }
             }
           };
-        })
-      })),
-      setPositionSettlement: (id, expiryMs, settleUnderlying) => set((st) => ({
-        positions: st.positions.map((p) => {
+        });
+        return {
+          spreads,
+          portfolios: touched ? touchPortfolio(st.portfolios, touched) : st.portfolios,
+        };
+      }),
+      setPositionSettlement: (id, expiryMs, settleUnderlying) => set((st) => {
+        let touched: string | null = null;
+        const positions = st.positions.map((p) => {
           if (p.id !== id) return p;
+          touched = p.portfolioId ?? DEFAULT_PORTFOLIO_ID;
           const key = String(expiryMs);
           const existing = p.settlements ?? {};
           if (!(settleUnderlying != null && Number.isFinite(settleUnderlying) && settleUnderlying > 0)) {
@@ -200,11 +319,16 @@ export const useStore = create<State>()(
               [key]: { settleUnderlying, settledAt: Date.now() }
             }
           };
-        })
-      })),
+        });
+        return {
+          positions,
+          portfolios: touched ? touchPortfolio(st.portfolios, touched) : st.portfolios,
+        };
+      }),
       clearRealizedHistory: () => set((st) => ({
         spreads: st.spreads.map((p) => ({ ...p, closeSnapshot: undefined })),
         positions: st.positions.map((p) => ({ ...p, closeSnapshot: undefined })),
+        portfolios: st.portfolios.map((meta) => ({ ...meta, updatedAt: Date.now() })),
       })),
       importState: (data) => {
         try {
@@ -234,6 +358,7 @@ export const useStore = create<State>()(
               note: typeof p?.note === 'string' ? p.note : undefined,
               favorite: typeof p?.favorite === 'boolean' ? p.favorite : undefined,
               settlements: normalizeSettlementsMap(p?.settlements),
+              portfolioId: typeof p?.portfolioId === 'string' ? p.portfolioId : undefined,
               short: normalizeLegSymbol({
                 symbol: String(short?.symbol || ''),
                 strike: Number(short?.strike) || 0,
@@ -294,27 +419,118 @@ export const useStore = create<State>()(
               legs,
               favorite: typeof p?.favorite === 'boolean' ? p.favorite : undefined,
               settlements: normalizeSettlementsMap(p?.settlements),
+              portfolioId: typeof p?.portfolioId === 'string' ? p.portfolioId : undefined,
             } as Position;
           }).filter((p) => p.legs.length > 0);
 
+          const rawPortfolios = Array.isArray((data as any)?.portfolios) ? (data as any).portfolios : [];
+          const portfolioMap = new Map<string, PortfolioMeta>();
+          for (const meta of rawPortfolios) {
+            const rawId = typeof meta?.id === 'string' ? meta.id.trim() : '';
+            if (!rawId) continue;
+            const name = String(meta?.name ?? '').trim() || 'Portfolio';
+            const createdAt = Number(meta?.createdAt);
+            const updatedAt = Number(meta?.updatedAt);
+            portfolioMap.set(rawId, {
+              id: rawId,
+              name,
+              createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
+              updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+            });
+          }
+          if (!portfolioMap.has(DEFAULT_PORTFOLIO_ID)) {
+            const meta = makePortfolioMeta(DEFAULT_PORTFOLIO_ID, 'Default');
+            portfolioMap.set(DEFAULT_PORTFOLIO_ID, meta);
+          }
+          const portfoliosList = Array.from(portfolioMap.values()).sort((a, b) => {
+            if (a.id === DEFAULT_PORTFOLIO_ID) return -1;
+            if (b.id === DEFAULT_PORTFOLIO_ID) return 1;
+            return a.createdAt - b.createdAt;
+          });
+          const validIds = new Set(portfoliosList.map((p) => p.id));
+          const ensurePortfolioIdForImport = (candidate?: string): string => (
+            candidate && validIds.has(candidate) ? candidate : DEFAULT_PORTFOLIO_ID
+          );
+          const spreadsWithPortfolio = normSpreads.map((s) => ({
+            ...s,
+            portfolioId: ensurePortfolioIdForImport(s.portfolioId),
+          }));
+          const positionsWithPortfolio = normPositions.map((p) => ({
+            ...p,
+            portfolioId: ensurePortfolioIdForImport(p.portfolioId),
+          }));
+          const incomingActive = typeof (data as any)?.activePortfolioId === 'string' ? (data as any).activePortfolioId : DEFAULT_PORTFOLIO_ID;
+          const activePortfolioId = ensurePortfolioIdForImport(incomingActive);
+
           set((st) => ({
-            spreads: normSpreads,
-            positions: normPositions,
+            spreads: spreadsWithPortfolio,
+            positions: positionsWithPortfolio,
             settings: {
               ...st.settings,
               ...(typeof settingsIn?.depositUsd === 'number' && settingsIn.depositUsd >= 0 ? { depositUsd: settingsIn.depositUsd } : {}),
               ...(typeof settingsIn?.riskLimitPct === 'number' && settingsIn.riskLimitPct >= 0 ? { riskLimitPct: settingsIn.riskLimitPct } : {}),
-            }
+            },
+            portfolios: portfoliosList,
+            activePortfolioId,
           }));
           return { ok: true };
         } catch (e: any) {
           return { ok: false, error: e?.message || 'Invalid file' };
         }
-      }
+      },
+      createPortfolio: (name) => {
+        const trimmed = (name ?? '').trim();
+        if (!trimmed) return null;
+        const id = crypto.randomUUID();
+        set((st) => {
+          if (ensurePortfolioExists(st.portfolios, id)) return {};
+          const meta = { ...makePortfolioMeta(id, trimmed), name: trimmed };
+          return {
+            portfolios: [...st.portfolios, meta],
+            activePortfolioId: id,
+          };
+        });
+        return id;
+      },
+      setActivePortfolio: (id) => set((st) => {
+        if (!ensurePortfolioExists(st.portfolios, id)) return {};
+        if (st.activePortfolioId === id) return {};
+        return { activePortfolioId: id };
+      }),
+      deletePortfolio: (id) => set((st) => {
+        if (id === DEFAULT_PORTFOLIO_ID) return {};
+        if (!ensurePortfolioExists(st.portfolios, id)) return {};
+        const fallback = st.activePortfolioId === id ? DEFAULT_PORTFOLIO_ID : st.activePortfolioId;
+        const spreads = st.spreads.map((spread) => spread.portfolioId === id ? { ...spread, portfolioId: DEFAULT_PORTFOLIO_ID } : spread);
+        const positions = st.positions.map((position) => position.portfolioId === id ? { ...position, portfolioId: DEFAULT_PORTFOLIO_ID } : position);
+        const portfolios = st.portfolios
+          .filter((meta) => meta.id !== id)
+          .map((meta) => meta.id === DEFAULT_PORTFOLIO_ID ? { ...meta, updatedAt: Date.now() } : meta);
+        const sorted = portfolios.sort((a, b) => {
+          if (a.id === DEFAULT_PORTFOLIO_ID) return -1;
+          if (b.id === DEFAULT_PORTFOLIO_ID) return 1;
+          return a.createdAt - b.createdAt;
+        });
+        return {
+          spreads,
+          positions,
+          portfolios: sorted,
+          activePortfolioId: fallback,
+        };
+      }),
+      renamePortfolio: (id, name) => set((st) => {
+        if (id === DEFAULT_PORTFOLIO_ID) return {};
+        const trimmed = (name ?? '').trim();
+        if (!trimmed) return {};
+        if (!ensurePortfolioExists(st.portfolios, id)) return {};
+        if (st.portfolios.some((p) => p.id !== id && p.name.trim().toLowerCase() === trimmed.toLowerCase())) return {};
+        const portfolios = st.portfolios.map((meta) => meta.id === id ? { ...meta, name: trimmed, updatedAt: Date.now() } : meta);
+        return { portfolios };
+      })
     }),
     {
       name: 'options-dashboard',
-      version: 4,
+      version: 5,
       migrate: (state: any, version) => {
         if (!state) return state as State;
         let nextState = state;
@@ -375,6 +591,39 @@ export const useStore = create<State>()(
               })
             : nextState.positions;
           nextState = { ...nextState, positions: adjustPositions };
+        }
+
+        if (version < 5) {
+          const spreads = Array.isArray(nextState.spreads)
+            ? nextState.spreads.map((s: any) => ({
+                ...s,
+                portfolioId: typeof s?.portfolioId === 'string' ? s.portfolioId : DEFAULT_PORTFOLIO_ID,
+              }))
+            : [];
+          const positions = Array.isArray(nextState.positions)
+            ? nextState.positions.map((p: any) => ({
+                ...p,
+                portfolioId: typeof p?.portfolioId === 'string' ? p.portfolioId : DEFAULT_PORTFOLIO_ID,
+              }))
+            : [];
+          let portfolios = Array.isArray(nextState.portfolios)
+            ? nextState.portfolios
+                .filter((meta: any) => typeof meta?.id === 'string' && meta.id)
+                .map((meta: any) => ({
+                  id: String(meta.id),
+                  name: String((meta.name ?? '').trim() || 'Portfolio'),
+                  createdAt: Number(meta?.createdAt) || Date.now(),
+                  updatedAt: Number(meta?.updatedAt) || Date.now(),
+                }))
+            : [];
+          if (!ensurePortfolioExists(portfolios, DEFAULT_PORTFOLIO_ID)) {
+            const defaultMeta = makePortfolioMeta(DEFAULT_PORTFOLIO_ID, 'Default');
+            portfolios = [defaultMeta, ...portfolios.filter((p: PortfolioMeta) => p.id !== DEFAULT_PORTFOLIO_ID)];
+          }
+          const activePortfolioId = typeof nextState.activePortfolioId === 'string' && ensurePortfolioExists(portfolios, nextState.activePortfolioId)
+            ? nextState.activePortfolioId
+            : DEFAULT_PORTFOLIO_ID;
+          nextState = { ...nextState, spreads, positions, portfolios, activePortfolioId };
         }
 
         return nextState as State;

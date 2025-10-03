@@ -10,6 +10,7 @@ function dteFrom(ms: number) {
 
 export function AddSpread() {
   const addSpread = useStore((s) => s.addSpread);
+  const activePortfolioId = useStore((s) => s.activePortfolioId);
   const [loading, setLoading] = React.useState(false);
   const [instruments, setInstruments] = React.useState<InstrumentInfo[]>([]);
   const [optType, setOptType] = React.useState<OptionType>('P');
@@ -130,6 +131,7 @@ export function AddSpread() {
       entryLong: eLong,
       qty: 1,
       ...(trimmedNote.length ? { note: trimmedNote } : {}),
+      portfolioId: activePortfolioId,
     };
     addSpread(payload);
     setShort(''); setLong(''); setCEnter(''); setNote('');

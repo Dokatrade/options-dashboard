@@ -1,5 +1,5 @@
 import React from 'react';
-import { useStore } from '../store/store';
+import { useStore, DEFAULT_PORTFOLIO_ID } from '../store/store';
 import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
 import { midPrice, bestBidAsk, fetchOptionTickers, fetchHV30, fetchOrderbookL1, fetchSpotEth, fetchOptionDeliveryPrice } from '../services/bybit';
 import type { HV30Stats } from '../services/bybit';
@@ -30,6 +30,7 @@ type Row = {
   closedAt?: number;
   closeSnapshot?: CloseSnapshot;
   note?: string;
+  portfolioId?: string;
   // vertical extras
   cEnter?: number; // per contract
   qty?: number;
@@ -142,6 +143,7 @@ function fromSpread(s: SpreadPosition): Row {
     closedAt: s.closedAt,
     closeSnapshot: s.closeSnapshot,
     note: s.note,
+    portfolioId: s.portfolioId,
     cEnter: s.cEnter,
     qty: s.qty ?? 1,
     favorite: s.favorite,
@@ -158,14 +160,19 @@ function fromPosition(p: Position): Row {
     closedAt: p.closedAt,
     closeSnapshot: p.closeSnapshot,
     note: p.note,
+    portfolioId: p.portfolioId,
     favorite: p.favorite,
     settlements: p.settlements,
   };
 }
 
 export function UnifiedPositionsTable() {
-  const spreads = useStore((s) => s.spreads);
-  const positions = useStore((s) => s.positions);
+  const allSpreads = useStore((s) => s.spreads);
+  const allPositions = useStore((s) => s.positions);
+  const portfolios = useStore((s) => s.portfolios);
+  const activePortfolioId = useStore((s) => s.activePortfolioId);
+  const setActivePortfolio = useStore((s) => s.setActivePortfolio);
+  const createPortfolio = useStore((s) => s.createPortfolio);
   const markClosed = useStore((s) => s.markClosed);
   const closePosition = useStore((s) => s.closePosition);
   const removeSpread = useStore((s) => s.remove);
@@ -177,6 +184,13 @@ export function UnifiedPositionsTable() {
   const toggleFavoritePosition = useStore((s) => s.toggleFavoritePosition);
   const setSpreadSettlement = useStore((s) => s.setSpreadSettlement);
   const setPositionSettlement = useStore((s) => s.setPositionSettlement);
+  const matchPortfolio = React.useCallback((portfolioId?: string) => {
+    if (activePortfolioId === DEFAULT_PORTFOLIO_ID) return true;
+    return (portfolioId ?? DEFAULT_PORTFOLIO_ID) === activePortfolioId;
+  }, [activePortfolioId]);
+  const spreads = React.useMemo(() => allSpreads.filter((s) => matchPortfolio(s.portfolioId)), [allSpreads, matchPortfolio]);
+  const positions = React.useMemo(() => allPositions.filter((p) => matchPortfolio(p.portfolioId)), [allPositions, matchPortfolio]);
+  const portfolioNameById = React.useMemo(() => Object.fromEntries(portfolios.map((p) => [p.id, p.name])), [portfolios]);
   const [showClosed, setShowClosed] = React.useState(true);
   const [hideExpired, setHideExpired] = React.useState(true);
   const [useExecPnl, setUseExecPnl] = React.useState(true);
@@ -189,6 +203,9 @@ export function UnifiedPositionsTable() {
   const [tab, setTab] = React.useState<'all'|'fav'>('all');
   const [sortKey, setSortKey] = React.useState<'date'|'pnl'|'theta'|'expiry'>('date');
   const [sortDir, setSortDir] = React.useState<'asc'|'desc'>('desc');
+  const [showCreatePortfolioModal, setShowCreatePortfolioModal] = React.useState(false);
+  const [portfolioNameDraft, setPortfolioNameDraft] = React.useState('');
+  const [createPortfolioError, setCreatePortfolioError] = React.useState<string | null>(null);
   const { slowMode, setSlowMode: setGlobalSlowMode, slowStats, manualRefresh, register } = useSlowMode();
   const rowsRef = React.useRef<Row[]>([]);
   const autoSettleAttemptRef = React.useRef<Map<string, number>>(new Map());
@@ -258,6 +275,33 @@ export function UnifiedPositionsTable() {
   const [settleTarget, setSettleTarget] = React.useState<Row | null>(null);
   const [actionMenuOpen, setActionMenuOpen] = React.useState(false);
   const actionMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const activePortfolio = React.useMemo(() => portfolios.find((p) => p.id === activePortfolioId), [portfolios, activePortfolioId]);
+  const closeCreateModal = React.useCallback(() => {
+    setShowCreatePortfolioModal(false);
+    setPortfolioNameDraft('');
+    setCreatePortfolioError(null);
+  }, []);
+  const handleCreatePortfolio = React.useCallback(() => {
+    const trimmed = portfolioNameDraft.trim();
+    if (!trimmed) {
+      setCreatePortfolioError('Введите название портфеля');
+      return;
+    }
+    const exists = portfolios.some((p) => p.name.trim().toLowerCase() === trimmed.toLowerCase());
+    if (exists) {
+      setCreatePortfolioError('Портфель с таким названием уже существует');
+      return;
+    }
+    const id = createPortfolio(trimmed);
+    if (!id) {
+      setCreatePortfolioError('Не удалось создать портфель');
+      return;
+    }
+    closeCreateModal();
+  }, [closeCreateModal, createPortfolio, portfolioNameDraft, portfolios]);
+  const handlePortfolioSelect = React.useCallback((event: React.ChangeEvent<HTMLSelectElement>) => {
+    setActivePortfolio(event.target.value);
+  }, [setActivePortfolio]);
 
   const DEFAULT_ACTION_VISIBILITY: Record<ActionKey, boolean> = React.useMemo(() => ({
     favorite: true,
@@ -414,13 +458,13 @@ export function UnifiedPositionsTable() {
     }
     if (target.id.startsWith('S:')) {
       try {
-        addPosition({ legs: target.legs, note: target.note });
+        addPosition({ legs: target.legs, note: target.note, portfolioId: target.portfolioId ?? activePortfolioId });
         const latest = useStore.getState().positions?.[0]?.id;
         removeSpread(target.id.slice(2));
         if (latest) setEditId(latest);
       } catch {}
     }
-  }, [addPosition, removeSpread]);
+  }, [activePortfolioId, addPosition, removeSpread]);
 
   const openNotes = React.useCallback((target: Row) => {
     if (!target) return;
@@ -1461,8 +1505,26 @@ export function UnifiedPositionsTable() {
     <div>
       <div style={{display:'flex', alignItems:'center', gap:12, marginBottom: 12}}>
         <h3 style={{margin: 0}}>My Positions</h3>
-        <button className="primary" onClick={() => setShowAddPosition(true)}>Add Position</button>
+        <label style={{display:'flex', alignItems:'center', gap:6}}>
+          <span className="muted">Portfolio</span>
+          <select value={activePortfolioId} onChange={handlePortfolioSelect}>
+            {portfolios.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </label>
+        <button
+          className="ghost"
+          onClick={() => {
+            setPortfolioNameDraft('');
+            setCreatePortfolioError(null);
+            setShowCreatePortfolioModal(true);
+          }}
+        >
+          Create Portfolio
+        </button>
         <div style={{marginLeft:'auto'}}></div>
+        <button className="primary" onClick={() => setShowAddPosition(true)}>Add Position</button>
       </div>
       <div style={{display:'flex', gap: 8, alignItems:'center', marginBottom: 6, flexWrap:'wrap'}}>
         <button className="ghost" onClick={exportCSV}>Export CSV</button>
@@ -1675,6 +1737,26 @@ export function UnifiedPositionsTable() {
                       >
                         <div style={typeCellContentStyle}>
                           <span>{typeLabel}</span>
+                          {(() => {
+                            const pid = r.portfolioId ?? DEFAULT_PORTFOLIO_ID;
+                            if (pid === DEFAULT_PORTFOLIO_ID) return null;
+                            const name = portfolioNameById[pid] || 'Portfolio';
+                            return (
+                              <span
+                                style={{
+                                  background: 'rgba(128, 128, 128, 0.2)',
+                                  color: '#9A3412',
+                                  padding: '1px 6px',
+                                  borderRadius: 8,
+                                  fontSize: 'calc(1em - 3px)',
+                                  textTransform: 'none',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {name}
+                              </span>
+                            );
+                          })()}
                           {hasNote && (
                             <span
                               style={{
@@ -1904,7 +1986,7 @@ export function UnifiedPositionsTable() {
                                         }));
                                       } else if (r.id.startsWith('S:')) {
                                         try {
-                                          addPosition({ legs: r.legs, note: r.note });
+                                          addPosition({ legs: r.legs, note: r.note, portfolioId: r.portfolioId ?? activePortfolioId });
                                           const latest = useStore.getState().positions?.[0]?.id;
                                           removeSpread(r.id.slice(2));
                                           if (latest) {
@@ -2046,7 +2128,7 @@ export function UnifiedPositionsTable() {
             } else if (view.id.startsWith('S:')) {
               try {
                 // Convert spread to position, then hide the selected leg
-                addPosition({ legs: view.legs, note: view.note });
+                addPosition({ legs: view.legs, note: view.note, portfolioId: view.portfolioId ?? activePortfolioId });
                 const latest = useStore.getState().positions?.[0]?.id;
                 removeSpread(view.id.slice(2));
                 if (latest) {
@@ -2062,7 +2144,7 @@ export function UnifiedPositionsTable() {
                       .filter((v) => Number.isFinite(v));
                     const baseCreated = Number.isFinite(pos.createdAt) ? Number(pos.createdAt) : Date.now();
                     const viewCreatedAt = legTimes.length ? Math.min(baseCreated, ...legTimes) : baseCreated;
-                    setView({ id: 'P:' + pos.id, kind: 'multi', legs: pos.legs, createdAt: viewCreatedAt, closedAt: pos.closedAt, closeSnapshot: pos.closeSnapshot, note: pos.note, favorite: pos.favorite });
+                    setView({ id: 'P:' + pos.id, kind: 'multi', legs: pos.legs, createdAt: viewCreatedAt, closedAt: pos.closedAt, closeSnapshot: pos.closeSnapshot, note: pos.note, favorite: pos.favorite, portfolioId: pos.portfolioId });
                   }
                 }
               } catch {}
@@ -2158,6 +2240,67 @@ export function UnifiedPositionsTable() {
           onDeleteTemplate={handleDeleteTemplate}
           onDeleteTemplates={handleDeleteTemplates}
         />
+      )}
+      {showCreatePortfolioModal && (
+        <div
+          onClick={closeCreateModal}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 90,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--card)',
+              color: 'var(--fg)',
+              border: '1px solid var(--border)',
+              borderRadius: 12,
+              width: 'min(420px, 90%)',
+              boxShadow: '0 10px 30px rgba(0,0,0,.35)',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+              <strong>Create portfolio</strong>
+              <button className="ghost" onClick={closeCreateModal}>Close</button>
+            </div>
+            <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span className="muted">Name</span>
+                <input
+                  type="text"
+                  value={portfolioNameDraft}
+                  onChange={(e) => {
+                    setPortfolioNameDraft(e.target.value);
+                    if (createPortfolioError) setCreatePortfolioError(null);
+                  }}
+                  maxLength={64}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleCreatePortfolio();
+                    }
+                  }}
+                  autoFocus
+                />
+              </label>
+              {createPortfolioError && (
+                <div style={{ color: 'var(--loss)' }}>{createPortfolioError}</div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button className="ghost" onClick={closeCreateModal}>Cancel</button>
+                <button className="primary" onClick={handleCreatePortfolio}>Create</button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
       {editId && <EditPositionModal id={editId} onClose={() => setEditId(null)} />}
       {showAddPosition && <AddPositionModal onClose={() => setShowAddPosition(false)} />}

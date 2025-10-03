@@ -50,6 +50,7 @@ export type CloseSnapshot = {
 
 export interface SpreadPosition {
   id: string;
+  portfolioId?: string;
   short: Leg;
   long: Leg;
   cEnter: number; // entry credit
@@ -84,6 +85,7 @@ export interface PositionLeg {
 
 export interface Position {
   id: string;
+  portfolioId?: string;
   createdAt: number;
   closedAt?: number;
   closeSnapshot?: CloseSnapshot;

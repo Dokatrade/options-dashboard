@@ -9,6 +9,8 @@ type ExportPayload = {
   spreads: SpreadPosition[];
   settings: PortfolioSettings;
   ui: Record<string, unknown>;
+  portfolios: Array<{ id: string; name: string; createdAt: number; updatedAt: number }>;
+  activePortfolioId: string;
 };
 
 const isVerticalLike = (legs: Position['legs']): boolean => {
@@ -46,6 +48,7 @@ const toSpread = (pos: Position): SpreadPosition | null => {
     entryLong,
     short: shortLeg.leg as Leg,
     long: longLeg.leg as Leg,
+    portfolioId: pos.portfolioId,
   };
 };
 
@@ -108,17 +111,21 @@ export function TopBarBackupButtons() {
   const positions = useStore((s) => s.positions);
   const settings = useStore((s) => s.settings);
   const importState = useStore((s) => s.importState);
+  const portfolios = useStore((s) => s.portfolios);
+  const activePortfolioId = useStore((s) => s.activePortfolioId);
 
   const inputRef = React.useRef<HTMLInputElement | null>(null);
 
   const exportJson = () => {
     const payload: ExportPayload = {
-      version: 4,
+      version: 5,
       exportedAt: new Date().toISOString(),
       positions,
       spreads,
       settings,
       ui: collectUiSnapshot(),
+      portfolios,
+      activePortfolioId,
     };
     const text = JSON.stringify(payload, null, 2);
     const blob = new Blob([text], { type: 'application/json' });
@@ -155,7 +162,10 @@ export function TopBarBackupButtons() {
       if (!Array.isArray(spreadsPayload)) spreadsPayload = [];
       if (!Array.isArray(positionsPayload)) positionsPayload = [];
 
-      importState({ spreads: spreadsPayload, positions: positionsPayload, settings: data?.settings });
+      const portfoliosPayload = Array.isArray(data?.portfolios) ? data.portfolios : undefined;
+      const activePortfolioId = typeof data?.activePortfolioId === 'string' ? data.activePortfolioId : undefined;
+
+      importState({ spreads: spreadsPayload, positions: positionsPayload, settings: data?.settings, portfolios: portfoliosPayload, activePortfolioId });
       restoreUiSnapshot(data?.ui);
     } catch {
       // noop in top bar; Portfolio page can show messages if needed

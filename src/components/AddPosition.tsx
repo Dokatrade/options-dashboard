@@ -2,7 +2,7 @@ import React from 'react';
 import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk, fetchOrderbookL1, fetchSpotEth } from '../services/bybit';
 import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
 import { useSlowMode } from '../contexts/SlowModeContext';
-import { useStore } from '../store/store';
+import { useStore, DEFAULT_PORTFOLIO_ID } from '../store/store';
 import type { InstrumentInfo, Leg, OptionType, SpreadPosition } from '../utils/types';
 import { ensureUsdtSymbol } from '../utils/symbols';
 import { FiltersPanel } from './add-position/FiltersPanel';
@@ -18,6 +18,9 @@ const MONTH_INDEX: Record<string, number> = MONTH_CODES.reduce((acc, code, idx) 
 export function AddPosition() {
   const addSpread = useStore((s) => s.addSpread);
   const addPosition = useStore((s) => s.addPosition);
+  const activePortfolioId = useStore((s) => s.activePortfolioId);
+  const portfolios = useStore((s) => s.portfolios);
+  const createPortfolio = useStore((s) => s.createPortfolio);
   const [loading, setLoading] = React.useState(false);
   const [instruments, setInstruments] = React.useState<InstrumentInfo[]>([]);
   const [optType, setOptType] = React.useState<OptionType>('P');
@@ -39,6 +42,41 @@ export function AddPosition() {
   const mountedRef = React.useRef(true);
   const chainRef = React.useRef<InstrumentInfo[]>([]);
   const draftRef = React.useRef<DraftLeg[]>([]);
+  const [portfolioId, setPortfolioId] = React.useState<string>(() => activePortfolioId ?? DEFAULT_PORTFOLIO_ID);
+  const [showCreatePortfolio, setShowCreatePortfolio] = React.useState(false);
+  const [newPortfolioName, setNewPortfolioName] = React.useState('');
+  const [newPortfolioError, setNewPortfolioError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setPortfolioId((current) => {
+      const exists = portfolios.some((p) => p.id === current);
+      if (exists) return current;
+      const fallback = portfolios.find((p) => p.id === activePortfolioId)?.id;
+      return fallback ?? DEFAULT_PORTFOLIO_ID;
+    });
+  }, [activePortfolioId, portfolios]);
+
+  const handleCreatePortfolio = React.useCallback(() => {
+    const trimmed = newPortfolioName.trim();
+    if (!trimmed) {
+      setNewPortfolioError('Введите название');
+      return;
+    }
+    const exists = portfolios.some((p) => p.name.trim().toLowerCase() === trimmed.toLowerCase());
+    if (exists) {
+      setNewPortfolioError('Портфель с таким названием уже существует');
+      return;
+    }
+    const id = createPortfolio(trimmed);
+    if (!id) {
+      setNewPortfolioError('Не удалось создать портфель');
+      return;
+    }
+    setPortfolioId(id);
+    setShowCreatePortfolio(false);
+    setNewPortfolioName('');
+    setNewPortfolioError(null);
+  }, [createPortfolio, newPortfolioName, portfolios]);
 
   const mergeTickerUpdate = React.useCallback((sym: string, payload: Record<string, any>) => {
     setTickers(prev => {
@@ -639,6 +677,7 @@ export function AddPosition() {
         entryShort: mShort,
         entryLong: mLong,
         qty,
+        portfolioId,
       };
       addSpread(payload);
       setDraft([]);
@@ -654,7 +693,7 @@ export function AddPosition() {
         entryPrice: midPrice(tickers[d.leg.symbol]) ?? 0,
         createdAt: now + legOffset++,
       }));
-      addPosition({ legs });
+      addPosition({ legs, portfolioId });
       setDraft([]);
       setSelectedSymbol('');
     }
@@ -663,7 +702,27 @@ export function AddPosition() {
   return (
     <div className="add-position">
       <div className="add-position__header">
-        <h3>Add Position</h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <h3 style={{ margin: 0 }}>Add Position</h3>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="muted">Portfolio</span>
+            <select value={portfolioId} onChange={(e) => setPortfolioId(e.target.value)}>
+              {portfolios.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="ghost"
+            onClick={() => {
+              setNewPortfolioName('');
+              setNewPortfolioError(null);
+              setShowCreatePortfolio(true);
+            }}
+          >
+            Create Portfolio
+          </button>
+        </div>
         {loading && <div className="muted">Loading instruments…</div>}
       </div>
       <div className="add-position__grid">
@@ -723,6 +782,67 @@ export function AddPosition() {
           />
         </div>
       </div>
+      {showCreatePortfolio && (
+        <div
+          onClick={() => setShowCreatePortfolio(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 110,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--card)',
+              color: 'var(--fg)',
+              border: '1px solid var(--border)',
+              borderRadius: 12,
+              width: 'min(400px, 90%)',
+              boxShadow: '0 10px 24px rgba(0,0,0,.35)',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+              <strong>Create portfolio</strong>
+              <button className="ghost" onClick={() => setShowCreatePortfolio(false)}>Close</button>
+            </div>
+            <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span className="muted">Name</span>
+                <input
+                  type="text"
+                  value={newPortfolioName}
+                  onChange={(e) => {
+                    setNewPortfolioName(e.target.value);
+                    if (newPortfolioError) setNewPortfolioError(null);
+                  }}
+                  maxLength={64}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleCreatePortfolio();
+                    }
+                  }}
+                  autoFocus
+                />
+              </label>
+              {newPortfolioError && (
+                <div style={{ color: 'var(--loss)' }}>{newPortfolioError}</div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button className="ghost" onClick={() => setShowCreatePortfolio(false)}>Cancel</button>
+                <button className="primary" onClick={handleCreatePortfolio}>Create</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

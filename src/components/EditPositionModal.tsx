@@ -1,5 +1,5 @@
 import React from 'react';
-import { useStore } from '../store/store';
+import { useStore, DEFAULT_PORTFOLIO_ID } from '../store/store';
 import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk } from '../services/bybit';
 import { ensureUsdtSymbol } from '../utils/symbols';
 import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
@@ -44,8 +44,11 @@ export function EditPositionModal({ id, onClose }: Props) {
   const position = useStore((s) => s.positions.find(p => p.id === id));
   const updatePosition = useStore((s) => s.updatePosition);
   const removePosition = useStore((s) => s.removePosition);
+  const portfolios = useStore((s) => s.portfolios);
+  const activePortfolioId = useStore((s) => s.activePortfolioId);
   const baseCreatedAt = Number.isFinite(position?.createdAt) ? Number(position?.createdAt) : Date.now();
   const [draft, setDraft] = React.useState(() => position?.legs?.map((L) => ensureLegCreatedAt(L, baseCreatedAt)) || []);
+  const [portfolioId, setPortfolioId] = React.useState(() => position?.portfolioId ?? activePortfolioId ?? DEFAULT_PORTFOLIO_ID);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
   const [instruments, setInstruments] = React.useState<InstrumentInfo[]>([]);
   const [optType, setOptType] = React.useState<OptionType>('P');
@@ -132,6 +135,11 @@ export function EditPositionModal({ id, onClose }: Props) {
     if (!position) return;
     const fallback = Number.isFinite(position.createdAt) ? Number(position.createdAt) : Date.now();
     setDraft(position.legs.map((L) => ensureLegCreatedAt(L, fallback)));
+  }, [position?.id]);
+
+  React.useEffect(() => {
+    if (!position) return;
+    setPortfolioId(position.portfolioId ?? DEFAULT_PORTFOLIO_ID);
   }, [position?.id]);
 
   React.useEffect(() => {
@@ -257,8 +265,13 @@ export function EditPositionModal({ id, onClose }: Props) {
   };
 
   const save = () => {
-    updatePosition(id, (p) => ({ ...p, legs: draft }));
+    const validPortfolioId = portfolios.some((p) => p.id === portfolioId) ? portfolioId : DEFAULT_PORTFOLIO_ID;
+    updatePosition(id, (p) => ({ ...p, legs: draft, portfolioId: validPortfolioId }));
     onClose();
+  };
+
+  const handlePortfolioChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    setPortfolioId(event.target.value);
   };
 
   const removeLeg = (idx: number) => setDraft(d => d.filter((_, i) => i !== idx));
@@ -305,7 +318,17 @@ export function EditPositionModal({ id, onClose }: Props) {
     <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.45)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:70}}>
       <div style={{background:'var(--card)', color:'var(--fg)', border:'1px solid var(--border)', borderRadius:12, width:900, maxWidth:'95%', maxHeight:'90%', overflow:'auto'}}>
         <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 16px', borderBottom:'1px solid var(--border)'}}>
-          <strong>Edit Position</strong>
+          <div style={{display:'flex', alignItems:'center', gap:12, flexWrap:'wrap'}}>
+            <strong>Edit Position</strong>
+            <label style={{display:'flex', alignItems:'center', gap:6}}>
+              <span className="muted">Portfolio</span>
+              <select value={portfolioId} onChange={handlePortfolioChange}>
+                {portfolios.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
           <div style={{display:'flex', gap:8}}>
             <button className="ghost" onClick={save}>Save</button>
             <button className="ghost" onClick={onClose}>Close</button>

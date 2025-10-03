@@ -5,9 +5,11 @@ import { UnifiedPositionsTable } from './components/UnifiedPositionsTable';
 import { HelpModal } from './components/HelpModal';
 import { SlowModeProvider } from './contexts/SlowModeContext';
 import { TopBarBackupButtons } from './components/TopBarBackupButtons';
+import { PortfolioManagerModal } from './components/PortfolioManagerModal';
 
 export default function App() {
   const [help, setHelp] = React.useState(false);
+  const [showPortfolioManager, setShowPortfolioManager] = React.useState(false);
   return (
     <SlowModeProvider>
       <div className="container">
@@ -15,6 +17,7 @@ export default function App() {
           <h2 style={{margin: 0}}>ETH Options Dashboard (Bybit Public API)</h2>
           <div style={{display:'flex', gap:8, alignItems:'center'}}>
             <TopBarBackupButtons />
+            <button className="ghost" onClick={() => setShowPortfolioManager(true)}>Manage Portfolios</button>
             <button className="ghost" onClick={() => setHelp(true)}>Help</button>
           </div>
         </div>
@@ -32,6 +35,7 @@ export default function App() {
           </div>
         </div>
         {help && <HelpModal onClose={() => setHelp(false)} />}
+        {showPortfolioManager && <PortfolioManagerModal onClose={() => setShowPortfolioManager(false)} />}
       </div>
     </SlowModeProvider>
   );

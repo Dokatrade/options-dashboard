@@ -1,5 +1,5 @@
 import React from 'react';
-import { useStore } from '../store/store';
+import { useStore, DEFAULT_PORTFOLIO_ID } from '../store/store';
 import { midPrice, bestBidAsk, fetchOptionTickers, fetchSpotEth } from '../services/bybit';
 import { describeStrategy, type StrategyLeg } from '../utils/strategyDetection';
 import { useSlowMode } from '../contexts/SlowModeContext';
@@ -15,16 +15,26 @@ type ViewPayload = {
   note?: string;
   title: string;
   hiddenSymbols?: string[];
+  onClosePosition?: () => void;
+};
+
+const toFiniteNumber = (value: unknown): number | undefined => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : undefined;
 };
 
 export function PortfolioSummary() {
-  const spreads = useStore((s) => s.spreads);
-  const positions = useStore((s) => s.positions);
+  const allSpreads = useStore((s) => s.spreads);
+  const allPositions = useStore((s) => s.positions);
   const deposit = useStore((s) => s.settings.depositUsd);
   const riskLimitPct = useStore((s) => s.settings.riskLimitPct);
   const setDeposit = useStore((s) => s.setDeposit);
   const setRiskLimit = useStore((s) => s.setRiskLimitPct);
   const clearRealizedHistory = useStore((s) => s.clearRealizedHistory);
+  const portfolios = useStore((s) => s.portfolios);
+  const activePortfolioId = useStore((s) => s.activePortfolioId);
+  const markClosed = useStore((s) => s.markClosed);
+  const closePosition = useStore((s) => s.closePosition);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
   const { register } = useSlowMode();
   const [onlyFav, setOnlyFav] = React.useState<boolean>(() => {
@@ -36,6 +46,14 @@ export function PortfolioSummary() {
   React.useEffect(() => {
     try { localStorage.setItem('portfolio-only-favorites', onlyFav ? '1' : '0'); } catch {}
   }, [onlyFav]);
+
+  const matchPortfolio = React.useCallback((portfolioId?: string) => {
+    if (activePortfolioId === DEFAULT_PORTFOLIO_ID) return true;
+    return (portfolioId ?? DEFAULT_PORTFOLIO_ID) === activePortfolioId;
+  }, [activePortfolioId]);
+  const spreads = React.useMemo(() => allSpreads.filter((s) => matchPortfolio(s.portfolioId)), [allSpreads, matchPortfolio]);
+  const positions = React.useMemo(() => allPositions.filter((p) => matchPortfolio(p.portfolioId)), [allPositions, matchPortfolio]);
+  const activePortfolio = React.useMemo(() => portfolios.find((p) => p.id === activePortfolioId), [portfolios, activePortfolioId]);
 
   const spreadsSel = React.useMemo(() => (onlyFav ? spreads.filter(s => !!s.favorite) : spreads), [spreads, onlyFav]);
   const positionsSel = React.useMemo(() => (onlyFav ? positions.filter(p => !!p.favorite) : positions), [positions, onlyFav]);
@@ -329,6 +347,12 @@ export function PortfolioSummary() {
               bid1Price: t?.bid1Price != null ? Number(t.bid1Price) : cur.bid1Price,
               ask1Price: t?.ask1Price != null ? Number(t.ask1Price) : cur.ask1Price,
               markPrice: t?.markPrice != null ? Number(t.markPrice) : cur.markPrice,
+              indexPrice: t?.indexPrice != null ? Number(t.indexPrice) : cur.indexPrice,
+              delta: t?.delta != null ? Number(t.delta) : cur.delta,
+              gamma: t?.gamma != null ? Number(t.gamma) : cur.gamma,
+              vega: t?.vega != null ? Number(t.vega) : cur.vega,
+              theta: t?.theta != null ? Number(t.theta) : cur.theta,
+              openInterest: t?.openInterest != null ? Number(t.openInterest) : cur.openInterest,
             };
           });
           if (spot?.price != null && isFinite(spot.price) && needed.has('ETHUSDT')) {
@@ -409,7 +433,86 @@ export function PortfolioSummary() {
     } catch { return '—'; }
   };
 
-  const buildSpreadViewPayload = (spread: SpreadPosition, title: string): ViewPayload => {
+  const buildSpreadCloseSnapshot = React.useCallback((spread: SpreadPosition): CloseSnapshot => {
+    const now = Date.now();
+    const shortTicker = tickers[spread.short.symbol] || {};
+    const longTicker = tickers[spread.long.symbol] || {};
+    const { bid: shortBid, ask: shortAsk } = bestBidAsk(shortTicker);
+    const { bid: longBid, ask: longAsk } = bestBidAsk(longTicker);
+    const shortMid = toFiniteNumber(midPrice(shortTicker));
+    const longMid = toFiniteNumber(midPrice(longTicker));
+    const shortExec = toFiniteNumber(shortAsk) ?? shortMid ?? undefined;
+    const longExec = toFiniteNumber(longBid) ?? longMid ?? undefined;
+    const entryShortRaw = toFiniteNumber(spread.entryShort);
+    const entryLongRaw = toFiniteNumber(spread.entryLong);
+    const cEnter = toFiniteNumber(spread.cEnter) ?? 0;
+    const qty = Math.max(1, toFiniteNumber(spread.qty) ?? 1);
+    const entryShort = entryShortRaw ?? (entryLongRaw != null ? cEnter + entryLongRaw : cEnter);
+    const entryLong = entryLongRaw ?? (entryShortRaw != null ? entryShortRaw - cEnter : 0);
+    const snapshot: CloseSnapshot = { timestamp: now };
+    const indexCandidate = toFiniteNumber(shortTicker?.indexPrice) ?? toFiniteNumber(longTicker?.indexPrice);
+    if (indexCandidate != null) snapshot.indexPrice = indexCandidate;
+    const spotCandidate = toFiniteNumber((shortTicker as any)?.spotPrice) ?? toFiniteNumber((longTicker as any)?.spotPrice);
+    if (spotCandidate != null) snapshot.spotPrice = spotCandidate;
+    if (snapshot.spotPrice == null && snapshot.indexPrice != null) snapshot.spotPrice = snapshot.indexPrice;
+    if (shortExec != null && longExec != null) {
+      const netEntry = (entryShort * qty) - (entryLong * qty);
+      const netExec = (shortExec * qty) - (longExec * qty);
+      const pnlExec = netEntry - netExec;
+      if (Number.isFinite(pnlExec)) snapshot.pnlExec = pnlExec;
+    }
+    return snapshot;
+  }, [tickers]);
+
+  const buildPositionCloseSnapshot = React.useCallback((position: Position): CloseSnapshot => {
+    const now = Date.now();
+    const legs = Array.isArray(position.legs) ? position.legs : [];
+    let netEntry = 0;
+    let netExec = 0;
+    let hasQuote = false;
+    let indexPrice: number | undefined;
+    let spotPrice: number | undefined;
+    legs.forEach((leg) => {
+      const qty = Math.max(1, toFiniteNumber(leg.qty) ?? 1);
+      const entry = toFiniteNumber(leg.entryPrice) ?? 0;
+      const sign = leg.side === 'short' ? 1 : -1;
+      netEntry += sign * entry * qty;
+      const sym = String(leg.leg.symbol || '');
+      const ticker = tickers[sym] || {};
+      const { bid, ask } = bestBidAsk(ticker);
+      const mid = toFiniteNumber(midPrice(ticker));
+      const exec = leg.side === 'short'
+        ? (toFiniteNumber(ask) ?? mid)
+        : (toFiniteNumber(bid) ?? mid);
+      if (exec != null) {
+        hasQuote = true;
+        netExec += sign * exec * qty;
+      } else {
+        netExec += sign * entry * qty;
+      }
+      if (indexPrice == null) indexPrice = toFiniteNumber(ticker?.indexPrice);
+      if (spotPrice == null) {
+        const spotCandidate = toFiniteNumber((ticker as any)?.spotPrice) ?? toFiniteNumber(ticker?.markPrice);
+        if (spotCandidate != null) spotPrice = spotCandidate;
+      }
+    });
+    const snapshot: CloseSnapshot = { timestamp: now };
+    if (indexPrice != null) snapshot.indexPrice = indexPrice;
+    if (spotPrice != null) snapshot.spotPrice = spotPrice;
+    if (snapshot.spotPrice == null && snapshot.indexPrice != null) snapshot.spotPrice = snapshot.indexPrice;
+    if (snapshot.spotPrice == null) {
+      const underlying = tickers['ETHUSDT'];
+      const fallback = toFiniteNumber(underlying?.markPrice) ?? toFiniteNumber(underlying?.indexPrice);
+      if (fallback != null) snapshot.spotPrice = fallback;
+    }
+    if (hasQuote) {
+      const pnlExec = netEntry - netExec;
+      if (Number.isFinite(pnlExec)) snapshot.pnlExec = pnlExec;
+    }
+    return snapshot;
+  }, [tickers]);
+
+  const buildSpreadViewPayload = (spread: SpreadPosition, title: string, extra?: { onClosePosition?: () => void }): ViewPayload => {
     const qty = Number(spread.qty) > 0 ? Number(spread.qty) : 1;
     const entryShort = spread.entryShort != null ? Number(spread.entryShort)
       : (spread.entryLong != null ? Number(spread.cEnter) + Number(spread.entryLong) : Number(spread.cEnter));
@@ -427,10 +530,11 @@ export function PortfolioSummary() {
       closeSnapshot: spread.closeSnapshot,
       note: spread.note,
       title,
+      onClosePosition: extra?.onClosePosition,
     };
   };
 
-  const buildPositionViewPayload = (position: Position, title: string): ViewPayload => {
+  const buildPositionViewPayload = (position: Position, title: string, extra?: { onClosePosition?: () => void }): ViewPayload => {
     const legs = Array.isArray(position.legs) ? position.legs : [];
     const hiddenSymbols = legs.filter(L => L.hidden).map(L => L.leg.symbol);
     return {
@@ -442,8 +546,31 @@ export function PortfolioSummary() {
       note: position.note,
       title,
       hiddenSymbols: hiddenSymbols.length ? hiddenSymbols : undefined,
+      onClosePosition: extra?.onClosePosition,
     };
   };
+
+  const exitSpread = React.useCallback((spreadId: string) => {
+    const spread = useStore.getState().spreads.find((s) => s.id === spreadId);
+    if (!spread || spread.closedAt) return;
+    const snapshot = buildSpreadCloseSnapshot(spread);
+    markClosed(spreadId, snapshot);
+    setViewClosed((current) => {
+      if (!current || current.id !== `S:${spreadId}`) return current;
+      return { ...current, closedAt: snapshot.timestamp, closeSnapshot: snapshot };
+    });
+  }, [buildSpreadCloseSnapshot, markClosed]);
+
+  const exitPosition = React.useCallback((positionId: string) => {
+    const position = useStore.getState().positions.find((p) => p.id === positionId);
+    if (!position || position.closedAt) return;
+    const snapshot = buildPositionCloseSnapshot(position);
+    closePosition(positionId, snapshot);
+    setViewClosed((current) => {
+      if (!current || current.id !== `P:${positionId}`) return current;
+      return { ...current, closedAt: snapshot.timestamp, closeSnapshot: snapshot };
+    });
+  }, [buildPositionCloseSnapshot, closePosition]);
 
   const openEntryView = (entry: RealizedEntry) => {
     setShowRealizedModal(false);
@@ -458,17 +585,23 @@ export function PortfolioSummary() {
 
   const openConstructionView = (entry: { type: 'spread' | 'position'; ref: SpreadPosition | Position; title: string }) => {
     if (entry.type === 'spread') {
-      setViewClosed(buildSpreadViewPayload(entry.ref as SpreadPosition, entry.title || 'Spread'));
+      const spread = entry.ref as SpreadPosition;
+      setViewClosed(buildSpreadViewPayload(spread, entry.title || 'Spread', {
+        onClosePosition: () => exitSpread(spread.id),
+      }));
       return;
     }
-    setViewClosed(buildPositionViewPayload(entry.ref as Position, entry.title || 'Position'));
+    const position = entry.ref as Position;
+    setViewClosed(buildPositionViewPayload(position, entry.title || 'Position', {
+      onClosePosition: () => exitPosition(position.id),
+    }));
   };
 
   // removed Last Exit details from compact portfolio header
 
   return (
     <div>
-      <h3>Portfolio</h3>
+      <h3>Portfolio{activePortfolio ? ` · ${activePortfolio.name}` : ''}</h3>
       <div className="grid" style={{ alignItems: 'end' }}>
         <div style={{ gridColumn: '1 / -1' }}>
           <div>
@@ -662,6 +795,7 @@ export function PortfolioSummary() {
           note={viewClosed.note}
           title={viewClosed.title}
           hiddenSymbols={viewClosed.hiddenSymbols}
+          onClosePosition={viewClosed.onClosePosition}
           onClose={() => setViewClosed(null)}
         />
       )}
