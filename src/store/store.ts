@@ -16,6 +16,7 @@ type State = {
   updateSpread: (id: string, updater: (s: SpreadPosition) => SpreadPosition) => void;
   updatePosition: (id: string, updater: (p: Position) => Position) => void;
   setDeposit: (v: number) => void;
+  setRiskLimitPct: (v: number | undefined) => void;
   importState: (data: { spreads?: any[]; positions?: any[]; settings?: Partial<PortfolioSettings> }) => { ok: boolean; error?: string };
   toggleFavoriteSpread: (id: string) => void;
   toggleFavoritePosition: (id: string) => void;
@@ -79,7 +80,7 @@ export const useStore = create<State>()(
     (set, get) => ({
       spreads: [],
       positions: [],
-      settings: { depositUsd: 5000 },
+      settings: { depositUsd: 5000, riskLimitPct: undefined },
       addSpread: (s) => set((st) => ({
         spreads: [
           {
@@ -158,6 +159,7 @@ export const useStore = create<State>()(
         })
       })),
       setDeposit: (v) => set((st) => ({ settings: { ...st.settings, depositUsd: v } })),
+      setRiskLimitPct: (v) => set((st) => ({ settings: { ...st.settings, riskLimitPct: v != null && Number.isFinite(v) && v >= 0 ? Number(v) : undefined } })),
       toggleFavoriteSpread: (id) => set((st) => ({ spreads: st.spreads.map((p) => (p.id === id ? { ...p, favorite: !p.favorite } : p)) })),
       toggleFavoritePosition: (id) => set((st) => ({ positions: st.positions.map((p) => (p.id === id ? { ...p, favorite: !p.favorite } : p)) })),
       setSpreadSettlement: (id, expiryMs, settleUnderlying) => set((st) => ({
@@ -301,6 +303,7 @@ export const useStore = create<State>()(
             settings: {
               ...st.settings,
               ...(typeof settingsIn?.depositUsd === 'number' && settingsIn.depositUsd >= 0 ? { depositUsd: settingsIn.depositUsd } : {}),
+              ...(typeof settingsIn?.riskLimitPct === 'number' && settingsIn.riskLimitPct >= 0 ? { riskLimitPct: settingsIn.riskLimitPct } : {}),
             }
           }));
           return { ok: true };

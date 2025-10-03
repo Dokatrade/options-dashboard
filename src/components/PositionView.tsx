@@ -1,5 +1,5 @@
 import React from 'react';
-import type { PositionLeg, CloseSnapshot } from '../utils/types';
+import type { PositionLeg, CloseSnapshot, SpreadPosition, Position } from '../utils/types';
 import { subscribeLinearTicker, subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
 import { midPrice, bestBidAsk, fetchHV30 } from '../services/bybit';
 import { bsPrice, bsImpliedVol } from '../utils/bs';

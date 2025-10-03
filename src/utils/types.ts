@@ -66,6 +66,7 @@ export interface SpreadPosition {
 
 export interface PortfolioSettings {
   depositUsd: number;
+  riskLimitPct?: number;
 }
 
 export type PositionSide = 'short' | 'long';

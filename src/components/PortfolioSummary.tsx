@@ -21,7 +21,9 @@ export function PortfolioSummary() {
   const spreads = useStore((s) => s.spreads);
   const positions = useStore((s) => s.positions);
   const deposit = useStore((s) => s.settings.depositUsd);
+  const riskLimitPct = useStore((s) => s.settings.riskLimitPct);
   const setDeposit = useStore((s) => s.setDeposit);
+  const setRiskLimit = useStore((s) => s.setRiskLimitPct);
   const clearRealizedHistory = useStore((s) => s.clearRealizedHistory);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
   const { register } = useSlowMode();
@@ -354,6 +356,10 @@ export function PortfolioSummary() {
     return `$${v.toFixed(2)}`;
   };
   const riskShareDisplay = Number.isFinite(metrics.riskShare) ? `${metrics.riskShare.toFixed(1)}%` : '∞';
+  const riskLimit = Number.isFinite(riskLimitPct ?? NaN) && (riskLimitPct ?? 0) >= 0 ? (riskLimitPct as number) : undefined;
+  const riskExceeded = riskLimit != null && metrics.riskShare != null && Number.isFinite(metrics.riskShare) ? metrics.riskShare >= riskLimit : (riskLimit != null && !Number.isFinite(metrics.riskShare));
+  const riskHighlightStyle = riskExceeded ? { color: 'var(--loss)' } : undefined;
+  const riskRatioText = riskLimit != null ? `${riskShareDisplay} / ${riskLimit.toFixed(1)}%` : riskShareDisplay;
   const pnlColor = metrics.realized > 0 ? 'var(--gain)' : (metrics.realized < 0 ? 'var(--loss)' : undefined);
   const upnlColor = metrics.unrealized > 0 ? 'var(--gain)' : (metrics.unrealized < 0 ? 'var(--loss)' : undefined);
 
@@ -484,7 +490,11 @@ export function PortfolioSummary() {
               Realized
             </button>
             <span style={pnlColor ? { color: pnlColor } : undefined}>{fmtMoney(metrics.realized)}</span>
-            · UnRealized <span style={upnlColor ? { color: upnlColor } : undefined}>{fmtMoney(metrics.unrealized)}</span> · Risk {fmtMoney(metrics.openRisk)} ({riskShareDisplay})
+            · UnRealized <span style={upnlColor ? { color: upnlColor } : undefined}>{fmtMoney(metrics.unrealized)}</span> · Risk {fmtMoney(metrics.openRisk)} (
+            {riskLimit != null ? (
+              <span style={riskHighlightStyle}>{riskRatioText}</span>
+            ) : riskRatioText}
+            )
           </div>
         </div>
         <div style={{ gridColumn: '1 / -1', marginTop: 6 }}>
@@ -527,21 +537,41 @@ export function PortfolioSummary() {
               <div className="muted">Deposit (USD)</div>
               <input type="number" min="0" step="100" value={deposit} onChange={(e) => setDeposit(Number(e.target.value))} />
             </label>
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-              <input type="checkbox" checked={onlyFav} onChange={(e) => setOnlyFav(e.target.checked)} />
-              <span className="muted">Only favorites</span>
+            <label>
+              <div className="muted">Risk limit (%)</div>
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={riskLimit != null ? riskLimit : ''}
+                placeholder="—"
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === '') {
+                    setRiskLimit(undefined);
+                    return;
+                  }
+                  const num = Number(raw);
+                  setRiskLimit(Number.isFinite(num) && num >= 0 ? num : undefined);
+                }}
+              />
             </label>
-            <div style={{ marginLeft: 'auto' }} />
-            <button
-              className="ghost"
-              onClick={() => {
-                const ok = window.confirm('Clear all realized PnL history? This removes close snapshots from all items.');
-                if (!ok) return;
-                try { clearRealizedHistory(); } catch {}
-              }}
-            >
-              Clear all
-            </button>
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+              <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                <input type="checkbox" checked={onlyFav} onChange={(e) => setOnlyFav(e.target.checked)} />
+                <span className="muted">Only favorites</span>
+              </label>
+              <button
+                className="ghost"
+                onClick={() => {
+                  const ok = window.confirm('Clear all realized PnL history? This removes close snapshots from all items.');
+                  if (!ok) return;
+                  try { clearRealizedHistory(); } catch {}
+                }}
+              >
+                Clear all
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -579,34 +609,44 @@ export function PortfolioSummary() {
               {realizedEntries.length === 0 ? (
                 <div className="muted">Нет закрытых конструкций в текущем фильтре.</div>
               ) : (
-                realizedEntries.map((entry) => {
-                  const color = entry.pnl != null ? (entry.pnl > 0 ? 'var(--gain)' : (entry.pnl < 0 ? 'var(--loss)' : undefined)) : undefined;
-                  return (
-                    <div key={`${entry.type}-${entry.id}`} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
-                      <div>
-                        <button
-                          type="button"
-                          onClick={() => openEntryView(entry)}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            padding: 0,
-                            margin: 0,
-                            cursor: 'pointer',
-                            color: 'inherit',
-                            fontWeight: 600,
-                            fontSize: '1em',
-                            textAlign: 'left',
-                          }}
-                        >
-                          {entry.label || (entry.type === 'spread' ? 'Spread' : 'Position')}
-                        </button>
-                        <div className="muted" style={{ fontSize: '0.9em' }}>{fmtDateTime(entry.closedAt)}</div>
+                <>
+                  {realizedEntries.map((entry) => {
+                    const color = entry.pnl != null ? (entry.pnl > 0 ? 'var(--gain)' : (entry.pnl < 0 ? 'var(--loss)' : undefined)) : undefined;
+                    return (
+                      <div key={`${entry.type}-${entry.id}`} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => openEntryView(entry)}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              padding: 0,
+                              margin: 0,
+                              cursor: 'pointer',
+                              color: 'inherit',
+                              fontWeight: 600,
+                              fontSize: '1em',
+                              textAlign: 'left',
+                            }}
+                          >
+                            {entry.label || (entry.type === 'spread' ? 'Spread' : 'Position')}
+                          </button>
+                          <div className="muted" style={{ fontSize: '0.9em' }}>{fmtDateTime(entry.closedAt)}</div>
+                        </div>
+                        <div style={{ fontFamily: 'monospace', color, fontSize: '1.1em' }}>{entry.pnl != null ? fmtMoney(entry.pnl) : '—'}</div>
                       </div>
-                      <div style={{ fontFamily: 'monospace', color }}>{entry.pnl != null ? fmtMoney(entry.pnl) : '—'}</div>
-                    </div>
-                  );
-                })
+                    );
+                  })}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center', paddingTop: 12 }}>
+                    <div style={{ fontWeight: 600 }}>Total</div>
+                    {(() => {
+                      const sum = realizedEntries.reduce((acc, entry) => acc + (entry.pnl ?? 0), 0);
+                      const color = sum > 0 ? 'var(--gain)' : (sum < 0 ? 'var(--loss)' : undefined);
+                      return <div style={{ fontFamily: 'monospace', fontSize: '1.15em', color }}>{fmtMoney(sum)}</div>;
+                    })()}
+                  </div>
+                </>
               )}
             </div>
           </div>
