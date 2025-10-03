@@ -4,6 +4,7 @@ import { subscribeLinearTicker, subscribeOptionTicker, subscribeSpotTicker } fro
 import { midPrice, bestBidAsk, fetchHV30 } from '../services/bybit';
 import { bsPrice, bsImpliedVol } from '../utils/bs';
 import { inferUnderlyingSpotSymbol } from '../utils/underlying';
+import { useStore } from '../store/store';
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -33,6 +34,45 @@ type Props = {
 };
 
 export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, note, title, onClose, onClosePosition, onToggleLegHidden, hiddenSymbols, onEdit, onDeleteLeg }: Props) {
+  const updateSpread = useStore((s) => s.updateSpread);
+  const updatePosition = useStore((s) => s.updatePosition);
+  const storeSpread = useStore(React.useCallback((s) => id.startsWith('S:') ? s.spreads.find((sp) => `S:${sp.id}` === id) : undefined, [id]));
+  const storePosition = useStore(React.useCallback((s) => id.startsWith('P:') ? s.positions.find((p) => `P:${p.id}` === id) : undefined, [id]));
+  const noteValue = storeSpread?.note ?? storePosition?.note ?? note ?? '';
+  const [editingNote, setEditingNote] = React.useState(false);
+  const [noteDraft, setNoteDraft] = React.useState(noteValue);
+  React.useEffect(() => {
+    if (!editingNote) setNoteDraft(noteValue);
+  }, [noteValue, editingNote]);
+  const saveNote = React.useCallback(() => {
+    const draft = noteDraft;
+    const trimmed = draft.trim();
+    if ((trimmed.length === 0 && noteValue.trim().length === 0) || draft === noteValue) {
+      setEditingNote(false);
+      setNoteDraft(noteValue);
+      return;
+    }
+    if (id.startsWith('S:')) {
+      updateSpread(id.slice(2), (sp) => ({ ...sp, note: trimmed ? draft : undefined }));
+    } else {
+      updatePosition(id.slice(2), (p) => ({ ...p, note: trimmed ? draft : undefined }));
+    }
+    setNoteDraft(trimmed ? draft : '');
+    setEditingNote(false);
+  }, [id, noteDraft, noteValue, updatePosition, updateSpread]);
+
+  const clearNote = React.useCallback(() => {
+    if (id.startsWith('S:')) {
+      updateSpread(id.slice(2), (sp) => ({ ...sp, note: undefined }));
+    } else {
+      updatePosition(id.slice(2), (p) => ({ ...p, note: undefined }));
+    }
+    setNoteDraft('');
+    setEditingNote(false);
+  }, [id, updatePosition, updateSpread]);
+
+  const hasNote = React.useMemo(() => noteValue.trim().length > 0, [noteValue]);
+
   const positionCreatedAt = React.useMemo(() => {
     const fallback = Number.isFinite(createdAt) ? Number(createdAt) : Date.now();
     const legTimes = legs
@@ -1238,6 +1278,66 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
           </div>
 
           {/* Export buttons removed */}
+        </div>
+        <div style={{ margin: '8px 12px 12px 12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <div className="muted" style={{ fontSize: '0.85em' }}>Notes</div>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setEditingNote((v) => !v)}
+              style={{ padding: '2px 8px', fontSize: '0.8em' }}
+            >
+              {editingNote ? 'Cancel' : (hasNote ? 'Edit note' : 'Add note')}
+            </button>
+            {hasNote && !editingNote && (
+              <button
+                type="button"
+                className="ghost"
+                onClick={clearNote}
+                style={{ padding: '2px 8px', fontSize: '0.8em' }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {editingNote ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <textarea
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(e.target.value)}
+                rows={4}
+                style={{
+                  resize: 'vertical',
+                  fontSize: 'calc(1em - 2px)',
+                  fontFamily: 'inherit',
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  border: '1px solid var(--border)',
+                  background: 'var(--card)',
+                  color: 'var(--fg)',
+                }}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" className="primary" onClick={saveNote}>Save</button>
+                <button type="button" className="ghost" onClick={() => { setEditingNote(false); setNoteDraft(noteValue); }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div
+              style={{
+                whiteSpace: 'pre-wrap',
+                overflowWrap: 'anywhere',
+                fontSize: 'calc(1em - 2px)',
+                border: hasNote ? '1px solid var(--border)' : '1px dashed rgba(128,128,128,0.4)',
+                borderRadius: 6,
+                padding: '8px 12px',
+                color: hasNote ? 'inherit' : 'rgba(200,200,200,0.6)',
+              }}
+            >
+              {hasNote ? noteValue.trim() : '—'}
+            </div>
+          )}
         </div>
       </div>
     </div>

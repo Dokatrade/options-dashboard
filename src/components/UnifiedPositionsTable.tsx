@@ -1645,19 +1645,28 @@ export function UnifiedPositionsTable() {
                 return 0;
               });
               return augmented.map(({ r, c }) => {
-              const rule = ifRules[r.id];
-              const evalRes = evalRule(r, c, rule);
-              const expiries = Array.from(new Set(r.legs.map(L => Number(L.leg.expiryMs)).filter(ms => Number.isFinite(ms) && ms > 0))).sort();
-              const expLabel = expiries.length === 1 ? new Date(expiries[0]).toISOString().slice(0,10) : (expiries.length > 1 ? 'mixed' : '—');
-              const dte = c.dte != null ? `${c.dte}d` : (expiries.length === 1 ? `${Math.max(0, Math.round((expiries[0]-Date.now())/(86400000)))}d` : '—');
-              const typeLabel = strategyName(r.legs);
-              const hasNote = typeof r.note === 'string' && r.note.trim().length > 0;
-              const expiryInfo = describeExpiry(r);
-              const pnlValue = useExecPnl ? c.pnlExec : c.pnl;
-              const pnlColor = pnlValue > 0 ? 'var(--gain)' : (pnlValue < 0 ? 'var(--loss)' : undefined);
-              return (
-                <React.Fragment key={r.id}>
-                  <tr style={evalRes.matched ? { background:'rgba(64,64,64,.30)' } : undefined}>
+                const rule = ifRules[r.id];
+                const evalRes = evalRule(r, c, rule);
+                const expiries = Array.from(new Set(r.legs.map(L => Number(L.leg.expiryMs)).filter(ms => Number.isFinite(ms) && ms > 0))).sort();
+                const expLabel = expiries.length === 1 ? new Date(expiries[0]).toISOString().slice(0,10) : (expiries.length > 1 ? 'mixed' : '—');
+                const dte = c.dte != null ? `${c.dte}d` : (expiries.length === 1 ? `${Math.max(0, Math.round((expiries[0]-Date.now())/(86400000)))}d` : '—');
+                const typeLabel = strategyName(r.legs);
+                const hasNote = typeof r.note === 'string' && r.note.trim().length > 0;
+                const expiryInfo = describeExpiry(r);
+                const pnlValue = useExecPnl ? c.pnlExec : c.pnl;
+                const pnlColor = pnlValue > 0 ? 'var(--gain)' : (pnlValue < 0 ? 'var(--loss)' : undefined);
+                const rowStyle: React.CSSProperties = {};
+                if (r.closedAt != null) {
+                  rowStyle.background = 'rgba(110, 120, 130, 0.20)';
+                }
+                if (evalRes.matched && r.closedAt == null) {
+                  rowStyle.background = 'rgba(64,64,64,.30)';
+                } else if (evalRes.matched && r.closedAt != null) {
+                  rowStyle.boxShadow = 'inset 0 0 0 1px rgba(255,255,255,0.15)';
+                }
+                return (
+                  <React.Fragment key={r.id}>
+                  <tr style={rowStyle}>
                     {visibleColumns.type && (
                       <td
                         style={r.favorite

@@ -3,6 +3,19 @@ import { useStore } from '../store/store';
 import { midPrice, bestBidAsk, fetchOptionTickers, fetchSpotEth } from '../services/bybit';
 import { describeStrategy, type StrategyLeg } from '../utils/strategyDetection';
 import { useSlowMode } from '../contexts/SlowModeContext';
+import { PositionView } from './PositionView';
+import type { PositionLeg, CloseSnapshot, SpreadPosition, Position } from '../utils/types';
+
+type ViewPayload = {
+  id: string;
+  legs: PositionLeg[];
+  createdAt: number;
+  closedAt?: number;
+  closeSnapshot?: CloseSnapshot;
+  note?: string;
+  title: string;
+  hiddenSymbols?: string[];
+};
 
 export function PortfolioSummary() {
   const spreads = useStore((s) => s.spreads);
@@ -25,49 +38,6 @@ export function PortfolioSummary() {
   const spreadsSel = React.useMemo(() => (onlyFav ? spreads.filter(s => !!s.favorite) : spreads), [spreads, onlyFav]);
   const positionsSel = React.useMemo(() => (onlyFav ? positions.filter(p => !!p.favorite) : positions), [positions, onlyFav]);
 
-  // List of open option constructions: "Label YYYY-MM-DD · Nd"
-  const openOptionConstructions = React.useMemo(() => {
-    const out: string[] = [];
-    const fmt = (ms: number | undefined) => {
-      if (!(Number(ms) > 0)) return { date: '—', d: '—' };
-      const date = new Date(Number(ms));
-      const iso = date.toISOString().slice(0, 10);
-      const days = Math.max(0, Math.floor((Number(ms) - Date.now()) / 86_400_000));
-      return { date: iso, d: `${days}d` };
-    };
-    // spreads
-    spreadsSel.filter(s => !s.closedAt).forEach(s => {
-      const legs: StrategyLeg[] = [
-        { side: 'short', type: s.short.optionType, expiryMs: Number(s.short.expiryMs)||0, strike: Number(s.short.strike)||0, qty: Number(s.qty)||1, symbol: s.short.symbol },
-        { side: 'long',  type: s.long.optionType,  expiryMs: Number(s.long.expiryMs)||0,  strike: Number(s.long.strike)||0,  qty: Number(s.qty)||1, symbol: s.long.symbol },
-      ];
-      const label = describeStrategy(legs, Number(s.cEnter)||0);
-      const expiries = legs.map(l=>Number(l.expiryMs)).filter(v=>v>0);
-      const nearest = expiries.length ? Math.min(...expiries) : undefined;
-      const { date, d } = fmt(nearest);
-      out.push(`${label} ${date} · ${d}`);
-    });
-    // positions
-    positionsSel.filter(p => !p.closedAt).forEach(p => {
-      const legs: StrategyLeg[] = (p.legs||[]).filter(L=>!L.hidden).map(L => ({
-        side: L.side,
-        type: L.leg.optionType,
-        expiryMs: Number(L.leg.expiryMs)||0,
-        strike: Number(L.leg.strike)||0,
-        qty: Number(L.qty)||1,
-        symbol: L.leg.symbol,
-        isUnderlying: !String(L.leg.symbol||'').includes('-') || !(Number(L.leg.expiryMs)>0),
-      }));
-      if (!legs.length) return;
-      const label = describeStrategy(legs, 0);
-      const expiries = legs.filter(l=>!l.isUnderlying).map(l=>Number(l.expiryMs)).filter(v=>v>0);
-      const nearest = expiries.length ? Math.min(...expiries) : undefined;
-      const { date, d } = fmt(nearest);
-      out.push(`${label} ${date} · ${d}`);
-    });
-    return out;
-  }, [spreadsSel, positionsSel]);
-
   // Follow main table preference for PnL calculation (exec vs mid)
   const [useExecPref, setUseExecPref] = React.useState<boolean>(() => {
     try {
@@ -89,6 +59,111 @@ export function PortfolioSummary() {
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, []);
+
+  // List of open option constructions with per-item uPnL and expiry
+  const openOptionConstructions = React.useMemo(() => {
+    const entries: Array<{
+      text: string;
+      title: string;
+      expiry: number;
+      upnl?: number;
+      type: 'spread' | 'position';
+      id: string;
+      ref: SpreadPosition | Position;
+    }> = [];
+    const fmt = (ms: number | undefined) => {
+      if (!(Number(ms) > 0)) return { date: '—', d: '—' };
+      const date = new Date(Number(ms));
+      const iso = date.toISOString().slice(0, 10);
+      const days = Math.max(0, Math.floor((Number(ms) - Date.now()) / 86_400_000));
+      return { date: iso, d: `${days}d` };
+    };
+    const midOf = (sym: string) => {
+      const t = tickers[sym];
+      const m = midPrice(t);
+      return (m != null && isFinite(m)) ? Number(m) : undefined;
+    };
+    const execFor = (sym: string, side: 'short'|'long') => {
+      const t = tickers[sym] || {};
+      const { bid, ask } = bestBidAsk(t);
+      if (side === 'short') return (ask != null && isFinite(Number(ask))) ? Number(ask) : undefined;
+      return (bid != null && isFinite(Number(bid))) ? Number(bid) : undefined;
+    };
+    // spreads
+    spreadsSel.filter(s => !s.closedAt).forEach(s => {
+      const legs: StrategyLeg[] = [
+        { side: 'short', type: s.short.optionType, expiryMs: Number(s.short.expiryMs)||0, strike: Number(s.short.strike)||0, qty: Number(s.qty)||1, symbol: s.short.symbol },
+        { side: 'long',  type: s.long.optionType,  expiryMs: Number(s.long.expiryMs)||0,  strike: Number(s.long.strike)||0,  qty: Number(s.qty)||1, symbol: s.long.symbol },
+      ];
+      const label = describeStrategy(legs, Number(s.cEnter)||0);
+      const expiries = legs.map(l=>Number(l.expiryMs)).filter(v=>v>0);
+      const nearest = expiries.length ? Math.min(...expiries) : undefined;
+      const { date, d } = fmt(nearest);
+      // uPnL for spread
+      const mShort = midOf(s.short.symbol);
+      const mLong = midOf(s.long.symbol);
+      const exShort = execFor(s.short.symbol, 'short');
+      const exLong = execFor(s.long.symbol, 'long');
+      const nowShort = useExecPref ? (exShort ?? mShort) : mShort;
+      const nowLong = useExecPref ? (exLong ?? mLong) : mLong;
+      const qty = Number(s.qty) > 0 ? Number(s.qty) : 1;
+      const upnl = (nowShort != null && nowLong != null) ? ((Number(s.cEnter) * qty) - ((Number(nowShort) - Number(nowLong)) * qty)) : undefined;
+      const expiryKey = nearest ?? Number.MAX_SAFE_INTEGER;
+      entries.push({
+        text: `${label} ${date} · ${d}`,
+        title: label,
+        expiry: expiryKey,
+        upnl,
+        type: 'spread',
+        id: s.id,
+        ref: s,
+      });
+    });
+    // positions
+    positionsSel.filter(p => !p.closedAt).forEach(p => {
+      const legs: StrategyLeg[] = (p.legs||[]).filter(L=>!L.hidden).map(L => ({
+        side: L.side,
+        type: L.leg.optionType,
+        expiryMs: Number(L.leg.expiryMs)||0,
+        strike: Number(L.leg.strike)||0,
+        qty: Number(L.qty)||1,
+        symbol: L.leg.symbol,
+        isUnderlying: !String(L.leg.symbol||'').includes('-') || !(Number(L.leg.expiryMs)>0),
+      }));
+      if (!legs.length) return;
+      const label = describeStrategy(legs, 0);
+      const expiries = legs.filter(l=>!l.isUnderlying).map(l=>Number(l.expiryMs)).filter(v=>v>0);
+      const nearest = expiries.length ? Math.min(...expiries) : undefined;
+      const { date, d } = fmt(nearest);
+      // uPnL for position (sum per leg)
+      const items = (p.legs||[]).filter(L => !L.hidden);
+      let upnl: number | undefined = 0;
+      for (const L of items) {
+        const sym = String(L.leg.symbol||'');
+        const mid = midOf(sym);
+        const ex = execFor(sym, L.side);
+        const now = useExecPref ? (ex ?? mid) : mid;
+        if (now == null) { upnl = undefined; break; }
+        const entry = Number(L.entryPrice) || 0;
+        const qty = Number(L.qty) || 1;
+        const sign = L.side === 'short' ? +1 : -1;
+        upnl += sign * (entry - Number(now)) * qty;
+      }
+      const expiryKey = nearest ?? Number.MAX_SAFE_INTEGER;
+      entries.push({
+        text: `${label} ${date} · ${d}`,
+        title: label,
+        expiry: expiryKey,
+        upnl,
+        type: 'position',
+        id: p.id,
+        ref: p,
+      });
+    });
+    entries.sort((a, b) => a.expiry - b.expiry);
+    return entries;
+  }, [spreadsSel, positionsSel, tickers, useExecPref]);
+
 
   const toNumber = (v: unknown) => {
     const n = Number(v);
@@ -161,7 +236,9 @@ export function PortfolioSummary() {
       if (!sameExpiry) return undefined;
       const width = Math.abs(Number(p.short.strike) - Number(p.long.strike));
       const qty = Number(p.qty) > 0 ? Number(p.qty) : 1;
-      const ml = Math.max(0, width - Number(p.cEnter)) * qty;
+      const c = Number(p.cEnter);
+      const perContract = c >= 0 ? Math.max(0, width - c) : Math.abs(c);
+      const ml = perContract * qty;
       return Number.isFinite(ml) ? ml : undefined;
     };
     const riskFromSpreads = spreadsSel.map(riskForSpread).filter((v): v is number => v != null).reduce((a,b)=>a+b,0);
@@ -176,10 +253,10 @@ export function PortfolioSummary() {
       const intrinsicAt = (S: number) => {
         let signed = 0;
         for (const L of legs) {
-          const isPerp = !String(L.leg.symbol || '').includes('-');
+          const isPerp = !String(L.leg.symbol || '').includes('-') || !(Number(L.leg.expiryMs) > 0);
           if (isPerp) {
-            // Перпы делают риск потенциально неограниченным; не считаем такую позицию в Risk
-            return undefined;
+            signed += (L.side === 'short' ? 1 : -1) * Number(S) * (Number(L.qty) || 1);
+            continue;
           }
           const K = Number(L.leg.strike) || 0;
           const q = Number(L.qty) || 1;
@@ -189,17 +266,31 @@ export function PortfolioSummary() {
         }
         return signed;
       };
-      const S0 = 0;
-      const Sbig = (Ks.length ? Ks[Ks.length - 1] : 1000) * 5 + 1;
-      const candidates = [S0, ...Ks, Sbig];
-      let minPnl = Infinity;
-      for (const S of candidates) {
+      const evalPnL = (S: number) => {
         const val = intrinsicAt(S);
         if (val == null) return undefined; // содержит перпы — пропускаем
         const pnl = netEntry - val;
-        if (isFinite(pnl) && pnl < minPnl) minPnl = pnl;
+        return Number.isFinite(pnl) ? pnl : undefined;
+      };
+      const S0 = 0;
+      const topStrike = Ks.length ? Ks[Ks.length - 1] : undefined;
+      const Sfar = (topStrike ?? 1000) * 5 + 1;
+      const Sfurther = (topStrike ?? 1000) * 10 + 1;
+      const candidateSet = new Set([S0, ...Ks, Sfar, Sfurther]);
+      let minPnl = Infinity;
+      let unbounded = false;
+      for (const S of candidateSet) {
+        const pnl = evalPnL(S);
+        if (pnl == null) return undefined;
+        if (pnl < minPnl) minPnl = pnl;
       }
-      return isFinite(minPnl) ? Math.max(0, -minPnl) : undefined;
+      // Если PnL продолжает резко ухудшаться при дальнейшем росте базового актива — считаем риск неограниченным и не учитываем
+      const pnlFar = evalPnL(Sfar);
+      const pnlFarthest = evalPnL(Sfurther);
+      if (pnlFar == null || pnlFarthest == null) return undefined;
+      if (pnlFarthest < pnlFar - 1e-6) unbounded = true;
+      if (unbounded) return Number.POSITIVE_INFINITY;
+      return Number.isFinite(minPnl) ? Math.max(0, -minPnl) : undefined;
     };
     const riskFromPositions = positionsSel.map(approxMaxLossForPosition).filter((v): v is number => v != null).reduce((a,b)=>a+b,0);
     const openRisk = riskFromSpreads + riskFromPositions;
@@ -255,10 +346,117 @@ export function PortfolioSummary() {
   }, [positionsSel, spreadsSel, register]);
 
   const [showManage, setShowManage] = React.useState(false);
+  const [showRealizedModal, setShowRealizedModal] = React.useState(false);
+  const [viewClosed, setViewClosed] = React.useState<ViewPayload | null>(null);
 
-  const fmtMoney = (v: number) => `$${(Number.isFinite(v) ? v : 0).toFixed(2)}`;
+  const fmtMoney = (v: number) => {
+    if (!Number.isFinite(v)) return '∞';
+    return `$${v.toFixed(2)}`;
+  };
+  const riskShareDisplay = Number.isFinite(metrics.riskShare) ? `${metrics.riskShare.toFixed(1)}%` : '∞';
   const pnlColor = metrics.realized > 0 ? 'var(--gain)' : (metrics.realized < 0 ? 'var(--loss)' : undefined);
   const upnlColor = metrics.unrealized > 0 ? 'var(--gain)' : (metrics.unrealized < 0 ? 'var(--loss)' : undefined);
+
+  type RealizedEntry = { id: string; type: 'spread' | 'position'; label: string; closedAt: number; pnl?: number; ref: SpreadPosition | Position };
+
+  const realizedEntries = React.useMemo<RealizedEntry[]>(() => {
+    const entries: RealizedEntry[] = [];
+    spreadsSel.filter(s => !!s.closedAt && !!s.closeSnapshot).forEach((s) => {
+      const legs: StrategyLeg[] = [
+        { side: 'short', type: s.short.optionType, expiryMs: Number(s.short.expiryMs) || 0, strike: Number(s.short.strike) || 0, qty: Number(s.qty) || 1, symbol: s.short.symbol },
+        { side: 'long', type: s.long.optionType, expiryMs: Number(s.long.expiryMs) || 0, strike: Number(s.long.strike) || 0, qty: Number(s.qty) || 1, symbol: s.long.symbol },
+      ];
+      const label = describeStrategy(legs, Number(s.cEnter) || 0);
+      const pnl = (() => {
+        const raw = Number(s?.closeSnapshot?.pnlExec);
+        return Number.isFinite(raw) ? raw : undefined;
+      })();
+      entries.push({ id: s.id, type: 'spread', label, closedAt: Number(s.closedAt) || 0, pnl, ref: s });
+    });
+    positionsSel.filter(p => !!p.closedAt && !!p.closeSnapshot).forEach((p) => {
+      const legs: StrategyLeg[] = Array.isArray(p.legs)
+        ? p.legs.filter(L => !L.hidden).map(L => ({
+          side: L.side,
+          type: L.leg.optionType,
+          expiryMs: Number(L.leg.expiryMs) || 0,
+          strike: Number(L.leg.strike) || 0,
+          qty: Number(L.qty) || 1,
+          symbol: L.leg.symbol,
+          isUnderlying: !String(L.leg.symbol || '').includes('-') || !(Number(L.leg.expiryMs) > 0),
+        }))
+        : [];
+      if (!legs.length) return;
+      const label = describeStrategy(legs, 0);
+      const pnl = (() => {
+        const raw = Number(p?.closeSnapshot?.pnlExec);
+        return Number.isFinite(raw) ? raw : undefined;
+      })();
+      entries.push({ id: p.id, type: 'position', label, closedAt: Number(p.closedAt) || 0, pnl, ref: p });
+    });
+    return entries.sort((a, b) => Number(b.closedAt || 0) - Number(a.closedAt || 0));
+  }, [positionsSel, spreadsSel]);
+
+  const fmtDateTime = (ms: number) => {
+    if (!(Number(ms) > 0)) return '—';
+    try {
+      return new Date(ms).toLocaleString();
+    } catch { return '—'; }
+  };
+
+  const buildSpreadViewPayload = (spread: SpreadPosition, title: string): ViewPayload => {
+    const qty = Number(spread.qty) > 0 ? Number(spread.qty) : 1;
+    const entryShort = spread.entryShort != null ? Number(spread.entryShort)
+      : (spread.entryLong != null ? Number(spread.cEnter) + Number(spread.entryLong) : Number(spread.cEnter));
+    const entryLong = spread.entryLong != null ? Number(spread.entryLong)
+      : (spread.entryShort != null ? Number(spread.entryShort) - Number(spread.cEnter) : 0);
+    const legs: PositionLeg[] = [
+      { leg: spread.short, side: 'short', qty, entryPrice: Number.isFinite(entryShort) ? entryShort : 0, createdAt: spread.createdAt },
+      { leg: spread.long, side: 'long', qty, entryPrice: Number.isFinite(entryLong) ? entryLong : 0, createdAt: spread.createdAt },
+    ];
+    return {
+      id: `S:${spread.id}`,
+      legs,
+      createdAt: spread.createdAt,
+      closedAt: spread.closedAt,
+      closeSnapshot: spread.closeSnapshot,
+      note: spread.note,
+      title,
+    };
+  };
+
+  const buildPositionViewPayload = (position: Position, title: string): ViewPayload => {
+    const legs = Array.isArray(position.legs) ? position.legs : [];
+    const hiddenSymbols = legs.filter(L => L.hidden).map(L => L.leg.symbol);
+    return {
+      id: `P:${position.id}`,
+      legs,
+      createdAt: position.createdAt,
+      closedAt: position.closedAt,
+      closeSnapshot: position.closeSnapshot,
+      note: position.note,
+      title,
+      hiddenSymbols: hiddenSymbols.length ? hiddenSymbols : undefined,
+    };
+  };
+
+  const openEntryView = (entry: RealizedEntry) => {
+    setShowRealizedModal(false);
+    if (entry.type === 'spread') {
+      const spread = entry.ref as SpreadPosition;
+      setViewClosed(buildSpreadViewPayload(spread, entry.label || 'Spread'));
+      return;
+    }
+    const position = entry.ref as Position;
+    setViewClosed(buildPositionViewPayload(position, entry.label || 'Position'));
+  };
+
+  const openConstructionView = (entry: { type: 'spread' | 'position'; ref: SpreadPosition | Position; title: string }) => {
+    if (entry.type === 'spread') {
+      setViewClosed(buildSpreadViewPayload(entry.ref as SpreadPosition, entry.title || 'Spread'));
+      return;
+    }
+    setViewClosed(buildPositionViewPayload(entry.ref as Position, entry.title || 'Position'));
+  };
 
   // removed Last Exit details from compact portfolio header
 
@@ -268,15 +466,56 @@ export function PortfolioSummary() {
       <div className="grid" style={{ alignItems: 'end' }}>
         <div style={{ gridColumn: '1 / -1' }}>
           <div>
-            Deposit {fmtMoney(deposit)} · Realized <span style={pnlColor ? { color: pnlColor } : undefined}>{fmtMoney(metrics.realized)}</span> · UnRealized <span style={upnlColor ? { color: upnlColor } : undefined}>{fmtMoney(metrics.unrealized)}</span> · Risk {fmtMoney(metrics.openRisk)} ({metrics.riskShare.toFixed(1)}%)
+            Deposit {fmtMoney(deposit)} ·
+            <button
+              type="button"
+              onClick={() => setShowRealizedModal(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                margin: '0 4px 0 6px',
+                textDecoration: 'none',
+                cursor: 'pointer',
+                color: 'inherit',
+                font: 'inherit',
+              }}
+            >
+              Realized
+            </button>
+            <span style={pnlColor ? { color: pnlColor } : undefined}>{fmtMoney(metrics.realized)}</span>
+            · UnRealized <span style={upnlColor ? { color: upnlColor } : undefined}>{fmtMoney(metrics.unrealized)}</span> · Risk {fmtMoney(metrics.openRisk)} ({riskShareDisplay})
           </div>
         </div>
         <div style={{ gridColumn: '1 / -1', marginTop: 6 }}>
           <div className="muted">Open options ({openOptionConstructions.length})</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {openOptionConstructions.length ? openOptionConstructions.map((line, idx) => (
-              <div key={idx} style={{ fontFamily: 'monospace' }}>{line}</div>
-            )) : <div className="muted">—</div>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {openOptionConstructions.length ? openOptionConstructions.map((e) => {
+              const v = e.upnl;
+              const color = (v == null) ? 'transparent' : (v > 1e-9 ? '#1f6f3b' : (v < -1e-9 ? '#7a1f1f' : '#777'));
+              return (
+                <div key={`${e.type}-${e.id}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ width: 10, height: 10, background: color, borderRadius: 2, display: 'inline-block' }} />
+                  <button
+                    type="button"
+                    onClick={() => openConstructionView({ type: e.type, ref: e.ref, title: e.title })}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      margin: 0,
+                      cursor: 'pointer',
+                      color: 'inherit',
+                      fontFamily: 'monospace',
+                      fontSize: '1.1em',
+                      textAlign: 'left',
+                    }}
+                  >
+                    {e.text}
+                  </button>
+                </div>
+              );
+            }) : <div className="muted">—</div>}
           </div>
         </div>
         <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
@@ -306,6 +545,86 @@ export function PortfolioSummary() {
           </div>
         )}
       </div>
+      {showRealizedModal && (
+        <div
+          onClick={() => setShowRealizedModal(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 80,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--card)',
+              color: 'var(--fg)',
+              border: '1px solid var(--border)',
+              borderRadius: 12,
+              width: 'min(600px, 95%)',
+              maxHeight: '80vh',
+              overflowY: 'auto',
+              boxShadow: '0 10px 30px rgba(0,0,0,.35)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+              <strong>Closed constructions</strong>
+              <button className="ghost" type="button" onClick={() => setShowRealizedModal(false)}>Close</button>
+            </div>
+            <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {realizedEntries.length === 0 ? (
+                <div className="muted">Нет закрытых конструкций в текущем фильтре.</div>
+              ) : (
+                realizedEntries.map((entry) => {
+                  const color = entry.pnl != null ? (entry.pnl > 0 ? 'var(--gain)' : (entry.pnl < 0 ? 'var(--loss)' : undefined)) : undefined;
+                  return (
+                    <div key={`${entry.type}-${entry.id}`} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => openEntryView(entry)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            margin: 0,
+                            cursor: 'pointer',
+                            color: 'inherit',
+                            fontWeight: 600,
+                            fontSize: '1em',
+                            textAlign: 'left',
+                          }}
+                        >
+                          {entry.label || (entry.type === 'spread' ? 'Spread' : 'Position')}
+                        </button>
+                        <div className="muted" style={{ fontSize: '0.9em' }}>{fmtDateTime(entry.closedAt)}</div>
+                      </div>
+                      <div style={{ fontFamily: 'monospace', color }}>{entry.pnl != null ? fmtMoney(entry.pnl) : '—'}</div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {viewClosed && (
+        <PositionView
+          id={viewClosed.id}
+          legs={viewClosed.legs}
+          createdAt={viewClosed.createdAt}
+          closedAt={viewClosed.closedAt}
+          closeSnapshot={viewClosed.closeSnapshot}
+          note={viewClosed.note}
+          title={viewClosed.title}
+          hiddenSymbols={viewClosed.hiddenSymbols}
+          onClose={() => setViewClosed(null)}
+        />
+      )}
     </div>
   );
 }
