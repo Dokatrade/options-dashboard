@@ -27,6 +27,15 @@ export interface Ticker {
   openInterest?: number;
 }
 
+export interface SpotKline {
+  openTime: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
 export type LegSettlement = {
   settleUnderlying: number;
   settledAt: number;

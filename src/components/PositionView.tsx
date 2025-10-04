@@ -5,8 +5,10 @@ import { midPrice, bestBidAsk, fetchHV30 } from '../services/bybit';
 import { bsPrice, bsImpliedVol } from '../utils/bs';
 import { inferUnderlyingSpotSymbol } from '../utils/underlying';
 import { useStore } from '../store/store';
+import { SpotPriceChart } from './SpotPriceChart';
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+type ChartMode = 'pnl' | 'spot';
 
 function formatCreatedAtLabel(createdAt?: number): string | null {
   if (!Number.isFinite(createdAt)) return null;
@@ -91,6 +93,8 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
   const [showExpiry, setShowExpiry] = React.useState(true);
   const svgRef = React.useRef<SVGSVGElement | null>(null);
   const [hover, setHover] = React.useState<{ S: number; pnlExpiry: number; pnlNow?: number } | null>(null);
+  const [chartMode, setChartMode] = React.useState<ChartMode>('pnl');
+  const [spotInterval, setSpotInterval] = React.useState<'60' | '240' | '1440'>('60');
   const [ivShift, setIvShift] = React.useState(0); // proportion
   const [rPct, setRPct] = React.useState(0);
   const [timePos, setTimePos] = React.useState(0); // 0..1 (today -> expiry)
@@ -98,6 +102,12 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
   const [hv30, setHv30] = React.useState<number | undefined>();
   const [linearIndex, setLinearIndex] = React.useState<Record<string, number>>({});
   const [graphHover, setGraphHover] = React.useState(false);
+  React.useEffect(() => {
+    if (chartMode !== 'pnl') {
+      setGraphHover(false);
+      setHover(null);
+    }
+  }, [chartMode]);
   const [xZoom, setXZoom] = React.useState(1); // default: show exactly ±50% around spot at open
   const [yZoom, setYZoom] = React.useState(1);
   const [useExecPnl, setUseExecPnl] = React.useState(false);
@@ -126,11 +136,18 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
       if (typeof s?.yZoom === 'number') setYZoom(Math.max(0.2, Math.min(5, s.yZoom)));
       if (typeof s?.showExpiry === 'boolean') setShowExpiry(s.showExpiry);
       if (typeof s?.useExecPnl === 'boolean') setUseExecPnl(s.useExecPnl);
+      if (s?.chartMode === 'spot' || s?.chartMode === 'pnl') setChartMode(s.chartMode);
+      if (s?.spotInterval === '60' || s?.spotInterval === '240' || s?.spotInterval === '1440') setSpotInterval(s.spotInterval);
     } catch {}
   }, []);
   React.useEffect(() => {
-    try { localStorage.setItem('position-view-ui-v1', JSON.stringify({ showT0, showExpiry, ivShift, rPct, timePos, xZoom, yZoom, useExecPnl })); } catch {}
-  }, [showT0, showExpiry, ivShift, rPct, timePos, xZoom, yZoom, useExecPnl]);
+    try {
+      localStorage.setItem(
+        'position-view-ui-v1',
+        JSON.stringify({ showT0, showExpiry, ivShift, rPct, timePos, xZoom, yZoom, useExecPnl, chartMode, spotInterval })
+      );
+    } catch {}
+  }, [showT0, showExpiry, ivShift, rPct, timePos, xZoom, yZoom, useExecPnl, chartMode, spotInterval]);
 
   // Per-position persistence for mouse-positioned view (x/y zoom, time, and display/model params)
   React.useEffect(() => {
@@ -147,6 +164,7 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
         if (typeof entry.showT0 === 'boolean') setShowT0(entry.showT0);
         if (typeof entry.showExpiry === 'boolean') setShowExpiry(entry.showExpiry);
         if (typeof entry.useExecPnl === 'boolean') setUseExecPnl(entry.useExecPnl);
+        if (entry.spotInterval === '60' || entry.spotInterval === '240' || entry.spotInterval === '1440') setSpotInterval(entry.spotInterval);
       }
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -155,10 +173,10 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
     try {
       const raw = localStorage.getItem('position-view-ui-bypos-v1');
       const map = raw ? JSON.parse(raw) : {};
-      map[viewKey] = { xZoom, yZoom, timePos, ivShift, rPct, showT0, showExpiry, useExecPnl };
+      map[viewKey] = { xZoom, yZoom, timePos, ivShift, rPct, showT0, showExpiry, useExecPnl, spotInterval };
       localStorage.setItem('position-view-ui-bypos-v1', JSON.stringify(map));
     } catch {}
-  }, [viewKey, xZoom, yZoom, timePos, ivShift, rPct, showT0, showExpiry, useExecPnl]);
+  }, [viewKey, xZoom, yZoom, timePos, ivShift, rPct, showT0, showExpiry, useExecPnl, spotInterval]);
 
   // (Reset view handler removed per request)
 
@@ -198,6 +216,16 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
     if (progress >= 0.05) return 0;
     return 1 - (progress / 0.05);
   }, [effTimePos, minTimePos]);
+  const spotIntervalLabel = React.useMemo(() => {
+    switch (spotInterval) {
+      case '240':
+        return '4H';
+      case '1440':
+        return '1D';
+      default:
+        return '1H';
+    }
+  }, [spotInterval]);
 
   React.useEffect(() => {
     const symbols = Array.from(new Set(legs.map(l => l.leg.symbol)));
@@ -715,6 +743,16 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
 
   const alreadyExited = closeSnapshot != null || typeof closedAt === 'number';
 
+  const exitTimestamp = closeTimestamp;
+  const exitPrice = React.useMemo(() => {
+    if (!closeSnapshot) return undefined;
+    const toNumber = (value: unknown) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : undefined;
+    };
+    return toNumber(closeSnapshot.spotPrice) ?? toNumber(closeSnapshot.indexPrice);
+  }, [closeSnapshot]);
+
   const closeInfo = React.useMemo(() => {
     if (!(closeTimestamp != null)) return null;
     const dt = new Date(closeTimestamp);
@@ -791,53 +829,77 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
         </div>
         <div style={{padding:12}}>
           <div style={{display:'flex', alignItems:'center', gap:12, marginBottom:6, flexWrap:'wrap'}}>
-            <div className="muted">PnL vs underlying price</div>
-            <label style={{display:'flex', alignItems:'center', gap:6}}>
-              <input type="checkbox" checked={showT0} onChange={(e)=>setShowT0(e.target.checked)} />
-              <span className="muted">Show T-curve (today)</span>
-            </label>
-            <label style={{display:'flex', alignItems:'center', gap:6}}>
-              <input type="checkbox" checked={showExpiry} onChange={(e)=>setShowExpiry(e.target.checked)} />
-              <span className="muted">Show expiry payoff</span>
-            </label>
             <div style={{display:'flex', alignItems:'center', gap:6}}>
-              <span className="muted">IV shift</span>
-              <input type="range" min={-0.5} max={0.5} step={0.01} value={ivShift} onChange={(e)=>setIvShift(Number(e.target.value))} />
-              <span className="muted">{Math.round(ivShift * 100)}%</span>
+              <span className="muted">Chart</span>
+              <select value={chartMode} onChange={(e) => setChartMode(e.target.value as ChartMode)}>
+                <option value="pnl">PnL profile</option>
+                <option value="spot">ETH/USDT spot (TradingView)</option>
+              </select>
             </div>
-            <div style={{display:'flex', alignItems:'center', gap:6, flexWrap:'wrap'}}>
-              <span className="muted">Rate (r)</span>
-              <input type="number" step={0.25} value={rPct} onChange={(e)=>setRPct(Number(e.target.value))} style={{width:72}} />
-              <span className="muted">%</span>
-              <span style={{marginLeft:12}} className="muted">Time: Today → Expiry</span>
-              <input
-                type="range"
-                min={isZeroDTE ? 0 : minTimePos}
-                max={1}
-                step={0.001}
-                value={isZeroDTE ? 1 : Math.max(minTimePos, timePos)}
-                onChange={(e)=> {
-                  const raw = Number(e.target.value);
-                  const snapped = raw >= 0.999 ? 1 : raw;
-                  setTimePos(Math.max(minTimePos, snapped));
-                }}
-                style={{width:220}}
-              />
-              <span className="muted">{(() => {
-                const expiries = legsCalc.map(L => Number(L.leg.expiryMs)).filter(Boolean);
-                if (!expiries.length) return 'DTE: —';
-                const tNow = Date.now();
-                const latest = Math.max(...expiries);
-                const start = Math.min(positionCreatedAt || tNow, latest);
-                const total = Math.max(1, latest - start);
-                const targetTime = start + effTimePos * total;
-                const ds = expiries.map(ms => Math.max(0, Math.round((ms - targetTime) / 86_400_000)));
-                const d = ds.length ? Math.max(...ds) : 0; // show remaining to latest expiry at target time
-                return `DTE: ${d}d`;
-              })()}</span>
-            </div>
+            {chartMode === 'pnl' ? (
+              <>
+                <div className="muted">PnL vs underlying price</div>
+                <label style={{display:'flex', alignItems:'center', gap:6}}>
+                  <input type="checkbox" checked={showT0} onChange={(e)=>setShowT0(e.target.checked)} />
+                  <span className="muted">Show T-curve (today)</span>
+                </label>
+                <label style={{display:'flex', alignItems:'center', gap:6}}>
+                  <input type="checkbox" checked={showExpiry} onChange={(e)=>setShowExpiry(e.target.checked)} />
+                  <span className="muted">Show expiry payoff</span>
+                </label>
+                <div style={{display:'flex', alignItems:'center', gap:6}}>
+                  <span className="muted">IV shift</span>
+                  <input type="range" min={-0.5} max={0.5} step={0.01} value={ivShift} onChange={(e)=>setIvShift(Number(e.target.value))} />
+                  <span className="muted">{Math.round(ivShift * 100)}%</span>
+                </div>
+                <div style={{display:'flex', alignItems:'center', gap:6, flexWrap:'wrap'}}>
+                  <span className="muted">Rate (r)</span>
+                  <input type="number" step={0.25} value={rPct} onChange={(e)=>setRPct(Number(e.target.value))} style={{width:72}} />
+                  <span className="muted">%</span>
+                  <span style={{marginLeft:12}} className="muted">Time: Today → Expiry</span>
+                  <input
+                    type="range"
+                    min={isZeroDTE ? 0 : minTimePos}
+                    max={1}
+                    step={0.001}
+                    value={isZeroDTE ? 1 : Math.max(minTimePos, timePos)}
+                    onChange={(e)=> {
+                      const raw = Number(e.target.value);
+                      const snapped = raw >= 0.999 ? 1 : raw;
+                      setTimePos(Math.max(minTimePos, snapped));
+                    }}
+                    style={{width:220}}
+                  />
+                  <span className="muted">{(() => {
+                    const expiries = legsCalc.map(L => Number(L.leg.expiryMs)).filter(Boolean);
+                    if (!expiries.length) return 'DTE: —';
+                    const tNow = Date.now();
+                    const latest = Math.max(...expiries);
+                    const start = Math.min(positionCreatedAt || tNow, latest);
+                    const total = Math.max(1, latest - start);
+                    const targetTime = start + effTimePos * total;
+                    const ds = expiries.map(ms => Math.max(0, Math.round((ms - targetTime) / 86_400_000)));
+                    const d = ds.length ? Math.max(...ds) : 0; // show remaining to latest expiry at target time
+                    return `DTE: ${d}d`;
+                  })()}</span>
+                </div>
+              </>
+            ) : (
+              <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
+                <span className="muted">TradingView candlesticks · interval {spotIntervalLabel} (auto refresh every 3 minutes)</span>
+                <label style={{display:'flex', alignItems:'center', gap:6}}>
+                  <span className="muted">Interval</span>
+                  <select value={spotInterval} onChange={(e) => setSpotInterval(e.target.value as '60' | '240' | '1440')}>
+                    <option value="60">1H</option>
+                    <option value="240">4H</option>
+                    <option value="1440">1D</option>
+                  </select>
+                </label>
+              </div>
+            )}
           </div>
-          <svg ref={svgRef} width={payoff.W} height={payoff.H} style={{maxWidth:'100%', height:'auto', cursor:'crosshair'}} viewBox={`0 0 ${payoff.W} ${payoff.H}`}
+          {chartMode === 'pnl' ? (
+            <svg ref={svgRef} width={payoff.W} height={payoff.H} style={{maxWidth:'100%', height:'auto', cursor:'crosshair'}} viewBox={`0 0 ${payoff.W} ${payoff.H}`}
                onMouseEnter={()=>setGraphHover(true)}
                onMouseMove={(e)=>{
                  const svg = svgRef.current; if (!svg) return;
@@ -1040,7 +1102,17 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
                 })()}
               </>
             )}
-          </svg>
+            </svg>
+          ) : (
+            <SpotPriceChart
+              active={chartMode === 'spot'}
+              symbol="ETHUSDT"
+              interval={spotInterval}
+              entryTimestamp={positionCreatedAt}
+              exitTimestamp={exitTimestamp}
+              exitPrice={exitPrice}
+            />
+          )}
 
           {/* Zoom controls removed by request; default X zoom set to 0.5 */}
 

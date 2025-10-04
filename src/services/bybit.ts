@@ -1,4 +1,4 @@
-import { InstrumentInfo, Ticker } from '../utils/types';
+import { InstrumentInfo, Ticker, SpotKline } from '../utils/types';
 
 const API = import.meta.env.DEV ? '/bybit' : 'https://api.bybit.com';
 
@@ -141,6 +141,7 @@ export async function fetchSpotEth(): Promise<{ price: number; change24h?: numbe
 type DeliveryCacheEntry = { price?: number; ts: number; ttl: number };
 const deliveryCache = new Map<string, DeliveryCacheEntry>();
 const deliveryHistoryCache = new Map<string, { list: Array<Record<string, any>>; ts: number }>();
+const spotKlineCache = new Map<string, { data: SpotKline[]; ts: number; ttl: number }>();
 
 async function getDeliveryPriceDirect(symbol: string, settleCoin?: string): Promise<number | undefined> {
   type R = { retCode: number; retMsg?: string; result?: { list?: Array<Record<string, any>> } };
@@ -216,6 +217,54 @@ export async function fetchOptionDeliveryPrice(symbol: string): Promise<number |
 
   deliveryCache.set(symbol, { price: undefined, ts: Date.now(), ttl: 5 * 60 * 1000 });
   return undefined;
+}
+
+export async function fetchSpotKlines(params: { symbol?: string; interval?: string; limit?: number; cacheMs?: number; start?: number; end?: number } = {}): Promise<SpotKline[]> {
+  const { symbol = 'ETHUSDT', interval = '60', limit = 200, cacheMs = 60_000, start, end } = params;
+  const cacheKey = `${symbol}:${interval}:${limit}:${start ?? ''}:${end ?? ''}`;
+  const cached = spotKlineCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < cached.ttl) return cached.data;
+
+  type R = { retCode: number; result?: { list?: Array<Array<string | number>> } };
+  const basePath = '/v5/market/kline';
+  let url: URL;
+  if (API.startsWith('http')) {
+    url = new URL(`${API}${basePath}`);
+  } else {
+    const origin = typeof window !== 'undefined' && window.location ? window.location.origin : 'http://localhost';
+    url = new URL(`${API}${basePath}`, origin);
+  }
+  url.searchParams.set('category', 'spot');
+  url.searchParams.set('symbol', symbol);
+  url.searchParams.set('interval', interval);
+  url.searchParams.set('limit', String(limit));
+  if (start != null) url.searchParams.set('start', String(Math.max(0, Math.floor(start))));
+  if (end != null) url.searchParams.set('end', String(Math.max(0, Math.floor(end))));
+  const data = await getJson<R>(url.toString());
+  const list = data?.result?.list ?? [];
+  const parsed = list
+    .map((row: any): SpotKline | undefined => {
+      if (!Array.isArray(row) || row.length < 5) return undefined;
+      const openTime = Number(row[0]);
+      const open = Number(row[1]);
+      const high = Number(row[2]);
+      const low = Number(row[3]);
+      const close = Number(row[4]);
+      const volumeRaw = row[5] != null ? Number(row[5]) : undefined;
+      if (![openTime, open, high, low, close].every((v) => Number.isFinite(v))) return undefined;
+      return {
+        openTime,
+        open,
+        high,
+        low,
+        close,
+        volume: volumeRaw != null && Number.isFinite(volumeRaw) ? volumeRaw : undefined,
+      };
+    })
+    .filter(Boolean) as SpotKline[];
+
+  spotKlineCache.set(cacheKey, { data: parsed, ts: Date.now(), ttl: cacheMs });
+  return parsed;
 }
 
 export type HV30Stats = {
