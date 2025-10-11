@@ -4,18 +4,11 @@ import { midPrice, bestBidAsk, fetchOptionTickers, fetchSpotEth } from '../servi
 import { describeStrategy, type StrategyLeg } from '../utils/strategyDetection';
 import { useSlowMode } from '../contexts/SlowModeContext';
 import { PositionView } from './PositionView';
-import type { PositionLeg, CloseSnapshot, SpreadPosition, Position } from '../utils/types';
+import type { CloseSnapshot, SpreadPosition, Position } from '../utils/types';
+import { buildPositionViewPayload, buildSpreadViewPayload, type ViewPayload } from '../utils/viewPayload';
 
-type ViewPayload = {
-  id: string;
-  legs: PositionLeg[];
-  createdAt: number;
-  closedAt?: number;
-  closeSnapshot?: CloseSnapshot;
-  note?: string;
-  title: string;
-  hiddenSymbols?: string[];
-  onClosePosition?: () => void;
+type PortfolioSummaryProps = {
+  onOpenSummary?: (portfolioId: string) => void;
 };
 
 const toFiniteNumber = (value: unknown): number | undefined => {
@@ -23,7 +16,7 @@ const toFiniteNumber = (value: unknown): number | undefined => {
   return Number.isFinite(num) ? num : undefined;
 };
 
-export function PortfolioSummary() {
+export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
   const allSpreads = useStore((s) => s.spreads);
   const allPositions = useStore((s) => s.positions);
   const deposit = useStore((s) => s.settings.depositUsd);
@@ -512,44 +505,6 @@ export function PortfolioSummary() {
     return snapshot;
   }, [tickers]);
 
-  const buildSpreadViewPayload = (spread: SpreadPosition, title: string, extra?: { onClosePosition?: () => void }): ViewPayload => {
-    const qty = Number(spread.qty) > 0 ? Number(spread.qty) : 1;
-    const entryShort = spread.entryShort != null ? Number(spread.entryShort)
-      : (spread.entryLong != null ? Number(spread.cEnter) + Number(spread.entryLong) : Number(spread.cEnter));
-    const entryLong = spread.entryLong != null ? Number(spread.entryLong)
-      : (spread.entryShort != null ? Number(spread.entryShort) - Number(spread.cEnter) : 0);
-    const legs: PositionLeg[] = [
-      { leg: spread.short, side: 'short', qty, entryPrice: Number.isFinite(entryShort) ? entryShort : 0, createdAt: spread.createdAt },
-      { leg: spread.long, side: 'long', qty, entryPrice: Number.isFinite(entryLong) ? entryLong : 0, createdAt: spread.createdAt },
-    ];
-    return {
-      id: `S:${spread.id}`,
-      legs,
-      createdAt: spread.createdAt,
-      closedAt: spread.closedAt,
-      closeSnapshot: spread.closeSnapshot,
-      note: spread.note,
-      title,
-      onClosePosition: extra?.onClosePosition,
-    };
-  };
-
-  const buildPositionViewPayload = (position: Position, title: string, extra?: { onClosePosition?: () => void }): ViewPayload => {
-    const legs = Array.isArray(position.legs) ? position.legs : [];
-    const hiddenSymbols = legs.filter(L => L.hidden).map(L => L.leg.symbol);
-    return {
-      id: `P:${position.id}`,
-      legs,
-      createdAt: position.createdAt,
-      closedAt: position.closedAt,
-      closeSnapshot: position.closeSnapshot,
-      note: position.note,
-      title,
-      hiddenSymbols: hiddenSymbols.length ? hiddenSymbols : undefined,
-      onClosePosition: extra?.onClosePosition,
-    };
-  };
-
   const exitSpread = React.useCallback((spreadId: string) => {
     const spread = useStore.getState().spreads.find((s) => s.id === spreadId);
     if (!spread || spread.closedAt) return;
@@ -601,7 +556,18 @@ export function PortfolioSummary() {
 
   return (
     <div>
-      <h3>Portfolio{activePortfolio ? ` · ${activePortfolio.name}` : ''}</h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <h3 style={{ margin: 0 }}>Portfolio{activePortfolio ? ` · ${activePortfolio.name}` : ''}</h3>
+        {onOpenSummary && (
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => onOpenSummary(activePortfolioId)}
+          >
+            Summary
+          </button>
+        )}
+      </div>
       <div className="grid" style={{ alignItems: 'end' }}>
         <div style={{ gridColumn: '1 / -1' }}>
           <div>

@@ -1,22 +1,67 @@
-# Node
+# --- OS / Editors ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# --- Node / Package managers ---
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+lerna-debug.log*
+.pnpm-debug.log*
+.pnp.*
+.npm/
+.npmrc.local
 
-# Builds
+# --- Logs & temp ---
+logs/
+*.log
+*.log.*
+tmp/
+temp/
+*.tmp
+
+# --- Builds / Artifacts ---
 dist/
 build/
 .out/
 .next/
 .cache/
 coverage/
+storybook-static/
+out-tsc/
 
-# Env
-.env
-.env.*
-
-# Build caches
+# --- Vite / TS caches ---
 .vite/
 *.tsbuildinfo
+
+# --- Env files (оставляем примеры) ---
+.env
+.env.*
+!.env.example
+!.env.defaults
+
+# --- Test tooling ---
+cypress/videos/
+cypress/screenshots/
+playwright-report/
+test-results/
+
+# --- Tooling caches ---
+.eslintcache
+.stylelintcache
+.turbo/
+.nx/
+
+# --- Bundle analysis reports ---
+stats.html
+stats-*.html
+
+# --- WSL/Windows-specific leftovers ---
+node_modules.winbak*/

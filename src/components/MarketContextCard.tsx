@@ -164,7 +164,13 @@ export function MarketContextCard() {
       if (widgetRef.current) {
         chartSubscriptionsRef.current.forEach((off) => off());
         chartSubscriptionsRef.current = [];
-        widgetRef.current.remove();
+        if (typeof widgetRef.current.remove === 'function') {
+          try {
+            widgetRef.current.remove();
+          } catch {
+            /* ignore abnormal teardown */
+          }
+        }
         widgetRef.current = null;
       }
 
@@ -196,7 +202,19 @@ export function MarketContextCard() {
 
       widgetRef.current = widget;
 
-      widget.onChartReady(() => {
+      const onReady = typeof widget.onChartReady === 'function'
+        ? widget.onChartReady.bind(widget)
+        : null;
+
+      if (!onReady) {
+        // TradingView sometimes returns a lightweight placeholder before script hydration
+        // Protect against calling the missing hook to avoid crashing the dashboard.
+        chartReadyRef.current = false;
+        chartRef.current = null;
+        return;
+      }
+
+      onReady(() => {
         if (cancelled) return;
         chartReadyRef.current = true;
         const chart = widget.activeChart?.() ?? widget.chart?.();
@@ -250,8 +268,12 @@ export function MarketContextCard() {
       chartRef.current = null;
       chartSubscriptionsRef.current.forEach((off) => off());
       chartSubscriptionsRef.current = [];
-      if (widgetRef.current) {
-        widgetRef.current.remove();
+      if (widgetRef.current?.remove) {
+        try {
+          widgetRef.current.remove();
+        } catch {
+          // noop — TradingView occasionally throws if container already removed
+        }
         widgetRef.current = null;
       }
     };

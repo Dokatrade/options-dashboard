@@ -3,9 +3,10 @@ import { useStore, DEFAULT_PORTFOLIO_ID } from '../store/store';
 
 type Props = {
   onClose: () => void;
+  onOpenSummary?: (portfolioId: string) => void;
 };
 
-export function PortfolioManagerModal({ onClose }: Props) {
+export function PortfolioManagerModal({ onClose, onOpenSummary }: Props) {
   const portfolios = useStore((s) => s.portfolios);
   const spreads = useStore((s) => s.spreads);
   const positions = useStore((s) => s.positions);
@@ -173,6 +174,17 @@ export function PortfolioManagerModal({ onClose }: Props) {
                       )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {!isEditing && onOpenSummary && (
+                        <button
+                          className="ghost"
+                          onClick={() => {
+                            onOpenSummary(meta.id);
+                            onClose();
+                          }}
+                        >
+                          Summary
+                        </button>
+                      )}
                       {!isActive && !isEditing && (
                         <button className="ghost" onClick={() => setActivePortfolio(meta.id)}>Set active</button>
                       )}

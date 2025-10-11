@@ -6,10 +6,13 @@ import { HelpModal } from './components/HelpModal';
 import { SlowModeProvider } from './contexts/SlowModeContext';
 import { TopBarBackupButtons } from './components/TopBarBackupButtons';
 import { PortfolioManagerModal } from './components/PortfolioManagerModal';
+import { PortfolioSummaryReport } from './components/PortfolioSummaryReport';
 
 export default function App() {
   const [help, setHelp] = React.useState(false);
   const [showPortfolioManager, setShowPortfolioManager] = React.useState(false);
+  const [summaryPortfolioId, setSummaryPortfolioId] = React.useState<string | null>(null);
+  const showSummary = summaryPortfolioId != null;
   return (
     <SlowModeProvider>
       <div className="container">
@@ -21,21 +24,42 @@ export default function App() {
             <button className="ghost" onClick={() => setHelp(true)}>Help</button>
           </div>
         </div>
-        <div className="row">
-          <div className="card" style={{flex: 2}}>
-            <MarketContextCard />
+        {showSummary ? (
+          <div className="row">
+            <div className="card" style={{ flex: 1 }}>
+              <PortfolioSummaryReport
+                portfolioId={summaryPortfolioId as string}
+                onBack={() => setSummaryPortfolioId(null)}
+              />
+            </div>
           </div>
-          <div className="card" style={{flex: 1}}>
-            <PortfolioSummary />
-          </div>
-        </div>
-        <div className="row">
-          <div className="card" style={{flex: 1}}>
-            <UnifiedPositionsTable />
-          </div>
-        </div>
+        ) : (
+          <>
+            <div className="row">
+              <div className="card" style={{flex: 2}}>
+                <MarketContextCard />
+              </div>
+              <div className="card" style={{flex: 1}}>
+                <PortfolioSummary onOpenSummary={(id) => setSummaryPortfolioId(id)} />
+              </div>
+            </div>
+            <div className="row">
+              <div className="card" style={{flex: 1}}>
+                <UnifiedPositionsTable />
+              </div>
+            </div>
+          </>
+        )}
         {help && <HelpModal onClose={() => setHelp(false)} />}
-        {showPortfolioManager && <PortfolioManagerModal onClose={() => setShowPortfolioManager(false)} />}
+        {showPortfolioManager && (
+          <PortfolioManagerModal
+            onClose={() => setShowPortfolioManager(false)}
+            onOpenSummary={(id) => {
+              setSummaryPortfolioId(id);
+              setShowPortfolioManager(false);
+            }}
+          />
+        )}
       </div>
     </SlowModeProvider>
   );

@@ -302,6 +302,12 @@ export function UnifiedPositionsTable() {
   const handlePortfolioSelect = React.useCallback((event: React.ChangeEvent<HTMLSelectElement>) => {
     setActivePortfolio(event.target.value);
   }, [setActivePortfolio]);
+  const prevPortfolioIdRef = React.useRef(activePortfolioId);
+  React.useEffect(() => {
+    if (prevPortfolioIdRef.current === activePortfolioId) return;
+    prevPortfolioIdRef.current = activePortfolioId;
+    manualRefresh().catch(() => {});
+  }, [activePortfolioId, manualRefresh]);
 
   const DEFAULT_ACTION_VISIBILITY: Record<ActionKey, boolean> = React.useMemo(() => ({
     favorite: true,

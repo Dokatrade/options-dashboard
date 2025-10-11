@@ -1,0 +1,1932 @@
+{
+  "version": 5,
+  "exportedAt": "2025-10-05T15:50:21.794Z",
+  "positions": [
+    {
+      "id": "8df7682b-dc00-44a7-9bd2-60a6e846809e",
+      "createdAt": 1759521705681,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-24OCT25-5000-C-USDT",
+            "strike": 5000,
+            "optionType": "C",
+            "expiryMs": 1761292800000
+          },
+          "side": "long",
+          "qty": 0.1,
+          "entryPrice": 97.35,
+          "createdAt": 1759521705681
+        }
+      ],
+      "portfolioId": "default"
+    },
+    {
+      "id": "eae8ae85-c4ac-48ac-8113-85e2dd4fd0de",
+      "createdAt": 1759515375142,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-4500-C-USDT",
+            "strike": 4500,
+            "optionType": "C",
+            "expiryMs": 1761897600000
+          },
+          "side": "long",
+          "qty": 0.1,
+          "entryPrice": 301.75,
+          "createdAt": 1759515375142
+        }
+      ],
+      "portfolioId": "default"
+    },
+    {
+      "id": "1268c9f7-660d-4f37-8c33-90a0cd064861",
+      "createdAt": 1759436100017,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-5000-C-USDT",
+            "strike": 5000,
+            "optionType": "C",
+            "expiryMs": 1761897600000
+          },
+          "side": "short",
+          "qty": 0.1,
+          "entryPrice": 135.55,
+          "createdAt": 1759436100017
+        },
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-4500-C-USDT",
+            "strike": 4500,
+            "optionType": "C",
+            "expiryMs": 1761897600000
+          },
+          "side": "long",
+          "qty": 0.1,
+          "entryPrice": 312,
+          "createdAt": 1759436100017
+        }
+      ],
+      "note": "Хорошая позиция, но взята слегка рановато.\n",
+      "favorite": true,
+      "portfolioId": "10c0d7e9-b4cd-41b3-8400-58ba5667daa8"
+    },
+    {
+      "id": "e238cbe3-5008-4bb6-99bc-5bac9602c223",
+      "createdAt": 1759266238260,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-17OCT25-4200-C-USDT",
+            "strike": 4200,
+            "optionType": "C",
+            "expiryMs": 1760688000000
+          },
+          "side": "long",
+          "qty": 0.1,
+          "entryPrice": 215.89999999999998,
+          "createdAt": 1759266238260
+        },
+        {
+          "leg": {
+            "symbol": "ETH-17OCT25-4000-P-USDT",
+            "strike": 4000,
+            "optionType": "P",
+            "expiryMs": 1760688000000
+          },
+          "side": "long",
+          "qty": 0.1,
+          "entryPrice": 121.30000000000001,
+          "createdAt": 1759266238261
+        }
+      ],
+      "favorite": false,
+      "closedAt": 1759317706448,
+      "note": "вав",
+      "portfolioId": "default"
+    },
+    {
+      "id": "7c5e1b90-e72e-4c9a-a0f6-921414cfbeb0",
+      "createdAt": 1759081247769,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-3800-P-USDT",
+            "strike": 3800,
+            "optionType": "P",
+            "expiryMs": 1761897600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 180.95,
+          "createdAt": 1759081247769
+        },
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-4300-C-USDT",
+            "strike": 4300,
+            "optionType": "C",
+            "expiryMs": 1761897600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 202.35,
+          "createdAt": 1759081247770
+        },
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-3700-P-USDT",
+            "strike": 3700,
+            "optionType": "P",
+            "expiryMs": 1761897600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 146.14999999999998,
+          "createdAt": 1759081247771
+        },
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-4400-C-USDT",
+            "strike": 4400,
+            "optionType": "C",
+            "expiryMs": 1761897600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 170.45,
+          "createdAt": 1759081247772
+        }
+      ],
+      "favorite": false,
+      "portfolioId": "default"
+    },
+    {
+      "id": "15fb91d2-fdeb-402b-bbfe-f727a170305a",
+      "createdAt": 1758528030784,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-3600-P-USDT",
+            "strike": 3600,
+            "optionType": "P",
+            "expiryMs": 1761897600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 111.1,
+          "createdAt": 1758528030784
+        },
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-3400-P-USDT",
+            "strike": 3400,
+            "optionType": "P",
+            "expiryMs": 1761897600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 73.25,
+          "createdAt": 1758528030784
+        }
+      ],
+      "closedAt": 1759092781036,
+      "portfolioId": "default"
+    },
+    {
+      "id": "cc73a7cc-0e30-4656-9d2a-6bbb0431e547",
+      "createdAt": 1758990107332,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-17OCT25-4000-C-USDT",
+            "strike": 4000,
+            "optionType": "C",
+            "expiryMs": 1760688000000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 244.45,
+          "createdAt": 1758990107332,
+          "hidden": false
+        },
+        {
+          "leg": {
+            "symbol": "ETHUSDT",
+            "strike": 0,
+            "optionType": "C",
+            "expiryMs": 0
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 4013.925,
+          "createdAt": 1758990107333,
+          "hidden": false
+        }
+      ],
+      "favorite": false,
+      "portfolioId": "default"
+    },
+    {
+      "id": "24c1d557-d732-4dec-ba1c-a095e3421f50",
+      "createdAt": 1758721041102,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETHUSDT",
+            "strike": 0,
+            "optionType": "C",
+            "expiryMs": 0
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 4181.345,
+          "createdAt": 1758721041102,
+          "hidden": false
+        },
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-4000-P-USDT",
+            "strike": 4000,
+            "optionType": "P",
+            "expiryMs": 1761897600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 235.10000000000002,
+          "createdAt": 1758723626813,
+          "hidden": false
+        }
+      ],
+      "favorite": false,
+      "closedAt": 1759482853130,
+      "closeSnapshot": {
+        "timestamp": 1759482853130,
+        "indexPrice": 4466.12,
+        "spotPrice": 4457.48,
+        "pnlExec": 156.3749999999991
+      },
+      "portfolioId": "default"
+    },
+    {
+      "id": "4257224e-9c23-4466-8e6c-a4631d0b17b6",
+      "createdAt": 1758723148903,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-10OCT25-4600-C-USDT",
+            "strike": 4600,
+            "optionType": "C",
+            "expiryMs": 1760083200000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 87.1,
+          "hidden": false,
+          "createdAt": 1758723148903
+        },
+        {
+          "leg": {
+            "symbol": "ETH-10OCT25-4200-C-USDT",
+            "strike": 4200,
+            "optionType": "C",
+            "expiryMs": 1760083200000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 218.7,
+          "createdAt": 1758723148904,
+          "hidden": false
+        }
+      ],
+      "note": "ChatGpt посоветовал данную стратегию.\n\nПри покупке через пару часов PNL достигал 10 баксов. \nВозможно, стоило его закрыть и переоткрыть! Круто!",
+      "favorite": false,
+      "closedAt": 1759309437633,
+      "portfolioId": "default"
+    },
+    {
+      "id": "dd195d8f-c5f7-4cee-984a-1e2a339ceabd",
+      "createdAt": 1758785072582,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETHUSDT",
+            "strike": 0,
+            "optionType": "C",
+            "expiryMs": 0
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 4585.235,
+          "createdAt": 1758785072582
+        },
+        {
+          "leg": {
+            "symbol": "ETH-3OCT25-4700-C-USDT",
+            "strike": 4700,
+            "optionType": "C",
+            "expiryMs": 1759478400000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 183.10000000000002,
+          "hidden": false,
+          "createdAt": 1758785072583
+        }
+      ],
+      "favorite": true,
+      "closeSnapshot": {
+        "timestamp": 1759478308417,
+        "indexPrice": 4455.56,
+        "spotPrice": 4456.8,
+        "pnlExec": -59.79499999000109
+      },
+      "closedAt": 1759478308417,
+      "portfolioId": "default",
+      "settlements": {
+        "1759478400000": {
+          "settleUnderlying": 4459.42822907,
+          "settledAt": 1759514774705
+        }
+      }
+    },
+    {
+      "id": "d61062bd-e7c3-42dd-bc2c-d16c58f49e16",
+      "createdAt": 1758138359892,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-3OCT25-4300-C-USDT",
+            "strike": 4300,
+            "optionType": "C",
+            "expiryMs": 1759478400000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 348.65,
+          "hidden": false
+        },
+        {
+          "leg": {
+            "symbol": "ETHUSDT",
+            "strike": 0,
+            "optionType": "C",
+            "expiryMs": 0
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 4502.875,
+          "hidden": false
+        }
+      ],
+      "favorite": false,
+      "closedAt": 1759096321171,
+      "portfolioId": "default",
+      "settlements": {
+        "1759478400000": {
+          "settleUnderlying": 4459.42822907,
+          "settledAt": 1759514774684
+        }
+      }
+    },
+    {
+      "id": "556762ae-e98f-4cb4-9468-a46584ac5260",
+      "createdAt": 1758123847567,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-4000-P-USDT",
+            "strike": 4000,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 34.1,
+          "hidden": false
+        },
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-3800-P-USDT",
+            "strike": 3800,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 17.95
+        }
+      ],
+      "favorite": true,
+      "settlements": {
+        "1758873600000": {
+          "settleUnderlying": 3917.19957062,
+          "settledAt": 1758891933230
+        }
+      },
+      "closedAt": 1758892348264,
+      "portfolioId": "default"
+    },
+    {
+      "id": "eb6e36b1-55c9-4a83-a235-80152d23b40d",
+      "createdAt": 1757874041551,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-3700-P-USDT",
+            "strike": 3700,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "short",
+          "qty": 0.1,
+          "entryPrice": 13.2,
+          "hidden": false
+        },
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-3500-P-USDT",
+            "strike": 3500,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "long",
+          "qty": 0.1,
+          "entryPrice": 0,
+          "hidden": false
+        }
+      ],
+      "closedAt": 1758582300015,
+      "favorite": false,
+      "settlements": {
+        "1758873600000": {
+          "settleUnderlying": 3917.2,
+          "settledAt": 1758881276806
+        }
+      },
+      "portfolioId": "default"
+    },
+    {
+      "id": "b6429152-7af3-4be5-90fc-0cc8cee4679b",
+      "createdAt": 1757800712772,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-4000-P-USDT",
+            "strike": 4000,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 28.3
+        },
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-3900-P-USDT",
+            "strike": 3900,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 20.6
+        }
+      ],
+      "settlements": {
+        "1758873600000": {
+          "settleUnderlying": 3917.2,
+          "settledAt": 1758882782330
+        }
+      },
+      "closedAt": 1758892348264,
+      "portfolioId": "default"
+    },
+    {
+      "id": "90c16972-e806-43a8-b824-c7913d526efa",
+      "createdAt": 1757798689144,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETHUSDT",
+            "strike": 0,
+            "optionType": "C",
+            "expiryMs": 0
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 4665.35,
+          "hidden": false,
+          "createdAt": 1757798689144
+        },
+        {
+          "leg": {
+            "symbol": "ETH-3OCT25-4600-C-USDT",
+            "strike": 4600,
+            "optionType": "C",
+            "expiryMs": 1759478400000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 305.7,
+          "hidden": false,
+          "createdAt": 1757798689145
+        }
+      ],
+      "closedAt": 1759478412713,
+      "settlements": {
+        "1759478400000": {
+          "settleUnderlying": 4459.42822907,
+          "settledAt": 1759478413040
+        }
+      },
+      "portfolioId": "default"
+    },
+    {
+      "id": "b6b8ed09-1213-4ae2-a40b-d309e066c3f4",
+      "createdAt": 1757781105774,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-4000-P-USDT",
+            "strike": 4000,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 26.700000000000003
+        },
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-3800-P-USDT",
+            "strike": 3800,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 16.049999999999997,
+          "hidden": false
+        }
+      ],
+      "settlements": {
+        "1758873600000": {
+          "settleUnderlying": 3917.19957062,
+          "settledAt": 1758891933524
+        }
+      },
+      "closedAt": 1758892348265,
+      "portfolioId": "default"
+    },
+    {
+      "id": "d7d80cec-6950-47f2-8ef7-57c8fb01fa02",
+      "createdAt": 1757778056767,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-3500-P-USDT",
+            "strike": 3500,
+            "optionType": "P",
+            "expiryMs": 1761897600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 83.44999999999999,
+          "hidden": false,
+          "createdAt": 1757778056767
+        },
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-3300-P-USDT",
+            "strike": 3300,
+            "optionType": "P",
+            "expiryMs": 1761897600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 56,
+          "hidden": false,
+          "createdAt": 1757778056768
+        },
+        {
+          "leg": {
+            "symbol": "ETH-28NOV25-3000-P-USDT",
+            "strike": 3000,
+            "optionType": "P",
+            "expiryMs": 1764316800000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 44.1,
+          "hidden": false,
+          "createdAt": 1757778056769
+        }
+      ],
+      "portfolioId": "bb914426-f82d-4d2e-af64-b2c11bf0f91a"
+    },
+    {
+      "id": "0963a556-789a-41e2-95ff-6e8653d090bc",
+      "createdAt": 1757777590778,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-3700-P-USDT",
+            "strike": 3700,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 13
+        },
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-3500-P-USDT",
+            "strike": 3500,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 0
+        }
+      ],
+      "settlements": {
+        "1758873600000": {
+          "settleUnderlying": 3917.19957062,
+          "settledAt": 1758891933256
+        }
+      },
+      "closedAt": 1758892348265,
+      "portfolioId": "default"
+    },
+    {
+      "id": "752e7b3b-a28e-46fe-addd-f3b565abe62a",
+      "createdAt": 1757776548464,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-3600-P-USDT",
+            "strike": 3600,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 13,
+          "hidden": false
+        },
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-3400-P-USDT",
+            "strike": 3400,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 0,
+          "hidden": false
+        }
+      ],
+      "note": "",
+      "settlements": {
+        "1758873600000": {
+          "settleUnderlying": 3917.19957062,
+          "settledAt": 1758891933269
+        }
+      },
+      "closedAt": 1758892348266,
+      "portfolioId": "default"
+    },
+    {
+      "id": "d710ef0e-cf2d-44be-9790-7e53d2be3a0f",
+      "createdAt": 1757775469618,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-3000-P-USDT",
+            "strike": 3000,
+            "optionType": "P",
+            "expiryMs": 1761897600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 24.87729529
+        },
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-2500-P-USDT",
+            "strike": 2500,
+            "optionType": "P",
+            "expiryMs": 1761897600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 0
+        }
+      ],
+      "portfolioId": "default"
+    },
+    {
+      "id": "bfbcc67a-d92f-46eb-bbbf-9f49dba28828",
+      "createdAt": 1758872255443,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-4000-P-USDT",
+            "strike": 4000,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 26.700000000000003,
+          "hidden": false,
+          "createdAt": 1758872255443
+        },
+        {
+          "leg": {
+            "symbol": "ETH-26SEP25-3800-P-USDT",
+            "strike": 3800,
+            "optionType": "P",
+            "expiryMs": 1758873600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 16.049999999999997,
+          "hidden": false,
+          "createdAt": 1758872255444
+        }
+      ],
+      "note": "Закрыл по -$24. \n\nНе знаю, правильно ли сделал или можно было подождать и уже закрыть даже по -$10.",
+      "favorite": true,
+      "closedAt": 1758615674167,
+      "settlements": {
+        "1758873600000": {
+          "settleUnderlying": 3917.19957062,
+          "settledAt": 1758891933788
+        }
+      },
+      "portfolioId": "default"
+    },
+    {
+      "id": "3803a4e8-d7ba-40a7-b144-e0c7c366534e",
+      "createdAt": 1757677532639,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-28NOV25-4500-C-USDT",
+            "strike": 4500,
+            "optionType": "C",
+            "expiryMs": 1764316800000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 575.2
+        }
+      ],
+      "favorite": false,
+      "closedAt": 1759133843885,
+      "portfolioId": "default"
+    },
+    {
+      "id": "38c974cc-086d-4215-a66a-4132a95c0461",
+      "createdAt": 1757669491530,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-28NOV25-4300-C-USDT",
+            "strike": 4300,
+            "optionType": "C",
+            "expiryMs": 1764316800000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 675.95
+        }
+      ],
+      "portfolioId": "default"
+    },
+    {
+      "id": "a04947d6-b89f-46b9-8a8b-42811504ef81",
+      "createdAt": 1757623218980,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-4200-C-USDT",
+            "strike": 4200,
+            "optionType": "C",
+            "expiryMs": 1761897600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 548.55,
+          "hidden": false
+        },
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-4000-C-USDT",
+            "strike": 4000,
+            "optionType": "C",
+            "expiryMs": 1761897600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 671.65,
+          "hidden": false
+        },
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-4100-C-USDT",
+            "strike": 4100,
+            "optionType": "C",
+            "expiryMs": 1761897600000
+          },
+          "side": "short",
+          "qty": 1,
+          "entryPrice": 627.2,
+          "hidden": false
+        },
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-4300-C-USDT",
+            "strike": 4300,
+            "optionType": "C",
+            "expiryMs": 1761897600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 500.65,
+          "hidden": false
+        }
+      ],
+      "favorite": false,
+      "closedAt": 1759492432305,
+      "closeSnapshot": {
+        "timestamp": 1759492432305,
+        "indexPrice": 4509.29,
+        "spotPrice": 474.25609828,
+        "pnlExec": -75.54999999999984
+      },
+      "portfolioId": "default"
+    },
+    {
+      "id": "93cec56a-c810-4b70-a209-9ed39ad5bd99",
+      "createdAt": 1757610007333,
+      "legs": [
+        {
+          "leg": {
+            "symbol": "ETH-31OCT25-3800-P-USDT",
+            "strike": 3800,
+            "optionType": "P",
+            "expiryMs": 1761897600000
+          },
+          "side": "long",
+          "qty": 1,
+          "entryPrice": 149.8,
+          "hidden": false
+        }
+      ],
+      "favorite": false,
+      "closedAt": 1759091705490,
+      "portfolioId": "default"
+    }
+  ],
+  "spreads": [
+    {
+      "id": "a680c4ba-7b40-4d8d-b113-0968680a6db3",
+      "createdAt": 1758528202544,
+      "short": {
+        "symbol": "ETH-31OCT25-3400-P-USDT",
+        "strike": 3400,
+        "optionType": "P",
+        "expiryMs": 1761897600000
+      },
+      "long": {
+        "symbol": "ETH-31OCT25-3200-P-USDT",
+        "strike": 3200,
+        "optionType": "P",
+        "expiryMs": 1761897600000
+      },
+      "cEnter": 25.200000000000003,
+      "entryShort": 73.15,
+      "entryLong": 47.95,
+      "qty": 1,
+      "favorite": false,
+      "closedAt": 1759309454193,
+      "portfolioId": "default"
+    }
+  ],
+  "settings": {
+    "depositUsd": 1000,
+    "riskLimitPct": 6
+  },
+  "ui": {
+    "draft": {
+      "optType": "C",
+      "expiry": 1761292800000,
+      "selectedSymbol": "",
+      "qty": 0.1,
+      "deltaMin": 0.1,
+      "deltaMax": 0.3,
+      "minOI": 1,
+      "maxSpread": 3,
+      "showAllStrikes": true,
+      "draft": [],
+      "strike": ""
+    },
+    "ifRules": {
+      "P:93cec56a-c810-4b70-a209-9ed39ad5bd99": {
+        "chains": []
+      },
+      "P:a04947d6-b89f-46b9-8a8b-42811504ef81": {
+        "chains": [
+          {
+            "chain": {
+              "scope": "position",
+              "conds": [
+                {
+                  "cond": {
+                    "left": {
+                      "base": {
+                        "kind": "position",
+                        "metric": "spot"
+                      }
+                    },
+                    "cmp": ">",
+                    "right": {
+                      "base": {
+                        "kind": "number",
+                        "value": 4000
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "P:c5171208-9a4e-45ae-8574-d3a7ff6aae3e": {
+        "chains": [
+          {
+            "chain": {
+              "scope": "position",
+              "conds": [
+                {
+                  "cond": {
+                    "left": {
+                      "base": {
+                        "kind": "position",
+                        "metric": "spot"
+                      }
+                    },
+                    "cmp": ">",
+                    "right": {
+                      "base": {
+                        "kind": "number",
+                        "value": 0
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "P:eb6e36b1-55c9-4a83-a235-80152d23b40d": {
+        "chains": [
+          {
+            "chain": {
+              "scope": "leg",
+              "conds": [
+                {
+                  "cond": {
+                    "left": {
+                      "base": {
+                        "kind": "leg",
+                        "metric": "bid",
+                        "legMode": "symbol"
+                      }
+                    },
+                    "cmp": ">",
+                    "right": {
+                      "base": {
+                        "kind": "number",
+                        "value": 30
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "S:bf9c90e9-05fb-404c-9df3-9b6118ed4971": {
+        "chains": [
+          {
+            "chain": {
+              "scope": "leg",
+              "conds": [
+                {
+                  "cond": {
+                    "left": {
+                      "base": {
+                        "kind": "leg",
+                        "metric": "bid",
+                        "legMode": "symbol"
+                      }
+                    },
+                    "cmp": ">",
+                    "right": {
+                      "base": {
+                        "kind": "number",
+                        "value": 30
+                      }
+                    }
+                  }
+                },
+                {
+                  "conj": "AND",
+                  "cond": {
+                    "left": {
+                      "base": {
+                        "kind": "leg",
+                        "metric": "spot",
+                        "legMode": "symbol"
+                      }
+                    },
+                    "cmp": ">",
+                    "right": {
+                      "base": {
+                        "kind": "number",
+                        "value": 0
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "P:bfbcc67a-d92f-46eb-bbbf-9f49dba28828": {
+        "chains": [
+          {
+            "chain": {
+              "scope": "position",
+              "conds": [
+                {
+                  "cond": {
+                    "left": {
+                      "base": {
+                        "kind": "position",
+                        "metric": "spot"
+                      }
+                    },
+                    "cmp": "<=",
+                    "right": {
+                      "base": {
+                        "kind": "number",
+                        "value": 4200
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "conj": "OR",
+            "chain": {
+              "scope": "leg",
+              "conds": [
+                {
+                  "cond": {
+                    "left": {
+                      "base": {
+                        "kind": "leg",
+                        "metric": "delta",
+                        "legMode": "current"
+                      }
+                    },
+                    "cmp": ">",
+                    "right": {
+                      "base": {
+                        "kind": "number",
+                        "value": 0.25
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "conj": "OR",
+            "chain": {
+              "scope": "position",
+              "conds": [
+                {
+                  "cond": {
+                    "left": {
+                      "base": {
+                        "kind": "position",
+                        "metric": "kmid"
+                      }
+                    },
+                    "cmp": ">=",
+                    "right": {
+                      "base": {
+                        "kind": "number",
+                        "value": 2
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "conj": "OR",
+            "chain": {
+              "scope": "position",
+              "conds": [
+                {
+                  "cond": {
+                    "left": {
+                      "base": {
+                        "kind": "position",
+                        "metric": "dte"
+                      }
+                    },
+                    "cmp": "<=",
+                    "right": {
+                      "base": {
+                        "kind": "number",
+                        "value": 4
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "P:3803a4e8-d7ba-40a7-b144-e0c7c366534e": {
+        "chains": [
+          {
+            "chain": {
+              "scope": "position",
+              "conds": [
+                {
+                  "cond": {
+                    "left": {
+                      "base": {
+                        "kind": "position",
+                        "metric": "spot"
+                      }
+                    },
+                    "cmp": ">",
+                    "right": {
+                      "base": {
+                        "kind": "number",
+                        "value": 4000
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ifTemplates": [
+      {
+        "name": "Spot<4200",
+        "scope": "position",
+        "cond": {
+          "left": {
+            "base": {
+              "kind": "position",
+              "metric": "spot"
+            }
+          },
+          "cmp": "<=",
+          "right": {
+            "base": {
+              "kind": "number",
+              "value": 4200
+            }
+          }
+        }
+      },
+      {
+        "name": "Kmid>=2",
+        "scope": "position",
+        "cond": {
+          "left": {
+            "base": {
+              "kind": "position",
+              "metric": "kmid"
+            }
+          },
+          "cmp": ">=",
+          "right": {
+            "base": {
+              "kind": "number",
+              "value": 2
+            }
+          }
+        }
+      }
+    ],
+    "positionsColumns": {
+      "type": true,
+      "legs": true,
+      "expiry": true,
+      "netEntry": true,
+      "netMid": true,
+      "pnl": true,
+      "delta": true,
+      "gamma": false,
+      "vega": true,
+      "theta": true,
+      "liquidity": false,
+      "actions": true
+    },
+    "positionsActions": {
+      "favorite": true,
+      "expand": true,
+      "view": true,
+      "edit": true,
+      "if": true,
+      "notes": true,
+      "settle": true,
+      "close": true,
+      "delete": true
+    },
+    "positionsUi": {
+      "tab": "all",
+      "sortKey": "date",
+      "sortDir": "desc",
+      "showClosed": true,
+      "useExecPnl": true,
+      "slowMode": true,
+      "hideExpired": true
+    },
+    "positionViewUi": {
+      "showT0": true,
+      "showExpiry": true,
+      "ivShift": 0,
+      "rPct": 0,
+      "timePos": 0.0000094386524470114,
+      "xZoom": 2.7440581804701294,
+      "yZoom": 1,
+      "useExecPnl": true,
+      "chartMode": "pnl",
+      "spotInterval": "1440"
+    },
+    "positionViewUiByPos": {
+      "pv-v1:long:ETH-26SEP25-3500-P-USDT:P:3500:1758873600000:1|short:ETH-26SEP25-3700-P-USDT:P:3700:1758873600000:1": {
+        "xZoom": 1.897547167271703,
+        "yZoom": 1,
+        "timePos": 0.132322432094995,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": false
+      },
+      "pv-v1:long:ETH-31OCT25-4000-P-USDT:P:4000:1761897600000:1": {
+        "xZoom": 0.771485106139394,
+        "yZoom": 1,
+        "timePos": 0.031010083464279945,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true
+      },
+      "pv-v1:long:ETH-26SEP25-3500-P-USDT:P:3500:1758873600000:0.1|short:ETH-26SEP25-3700-P-USDT:P:3700:1758873600000:0.1": {
+        "xZoom": 1.665503277213177,
+        "yZoom": 1,
+        "timePos": 0.0786163029509326,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-26SEP25-3400-P-USDT:P:3400:1758873600000:1|short:ETH-26SEP25-3600-P-USDT:P:3600:1758873600000:1": {
+        "xZoom": 0.2,
+        "yZoom": 1,
+        "timePos": 0.32398071771169734,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:short:ETH-26SEP25-4300-P:P:4300:1758873600000:1|short:ETH-28NOV25-4700-C-USDT:C:4700:1764316800000:1|short:ETH-28NOV25-4800-P-USDT:P:4800:1764316800000:1": {
+        "xZoom": 0.36442376007810173,
+        "yZoom": 1,
+        "timePos": 0.0327325480264488,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true
+      },
+      "pv-v1:long:ETH-28NOV25-3500-C-USDT:C:3500:1764316800000:1": {
+        "xZoom": 1.0413959654359688,
+        "yZoom": 1,
+        "timePos": 0.00197322846096775,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": false
+      },
+      "pv-v1:short:ETH-28NOV25-4500-C-USDT:C:4500:1764316800000:1": {
+        "xZoom": 0.8264944411079322,
+        "yZoom": 1,
+        "timePos": 0.06729900675858623,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true,
+        "spotInterval": "1440"
+      },
+      "pv-v1:long:ETH-31OCT25-3300-P-USDT:P:3300:1761897600000:1|short:ETH-31OCT25-3500-P-USDT:P:3500:1761897600000:1": {
+        "xZoom": 0.2,
+        "yZoom": 1,
+        "timePos": 0.1034660038288662,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true
+      },
+      "pv-v1:long:ETH-31OCT25-2500-P-USDT:P:2500:1761897600000:1|short:ETH-31OCT25-3000-P-USDT:P:3000:1761897600000:1": {
+        "xZoom": 0.8963378140676124,
+        "yZoom": 1,
+        "timePos": 0.1034660038288662,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": false
+      },
+      "pv-v1:long:ETH-31OCT25-4200-C-USDT:C:4200:1761897600000:1|short:ETH-31OCT25-4000-C-USDT:C:4000:1761897600000:1": {
+        "xZoom": 0.2,
+        "yZoom": 1,
+        "timePos": 0.0786163029509326,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true
+      },
+      "pv-v1:short:ETH-28NOV25-3600-C-USDT:C:3600:1764316800000:0.1": {
+        "xZoom": 0.7714851061393941,
+        "yZoom": 1,
+        "timePos": 0.00197322846096775,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true
+      },
+      "pv-v1:long:ETH-26SEP25-3800-P:P:3800:1758873600000:1|short:ETH-26SEP25-4000-P:P:4000:1758873600000:1": {
+        "xZoom": 0.2,
+        "yZoom": 1,
+        "timePos": 0.0986137608479276,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true
+      },
+      "pv-v1:short:ETH-3OCT25-4500-C-USDT:C:4500:1759478400000:1": {
+        "xZoom": 0.5715302236126326,
+        "yZoom": 1,
+        "timePos": 0.0821647314637104,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true
+      },
+      "pv-v1:long:ETH-28NOV25-4700-C-USDT:C:4700:1764316800000:1": {
+        "xZoom": 1.405737516117857,
+        "yZoom": 1,
+        "timePos": 0.06900176093552292,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:short:ETH-28NOV25-4300-C-USDT:C:4300:1764316800000:1": {
+        "xZoom": 0.8963378140676119,
+        "yZoom": 1,
+        "timePos": 0.00197322846096775,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true,
+        "spotInterval": "1440"
+      },
+      "pv-v1:long:ETH-31OCT25-3300-P-USDT:P:3300:1761897600000:1": {
+        "xZoom": 0.2,
+        "yZoom": 1,
+        "timePos": 0.1034660038288662,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true
+      },
+      "pv-v1:long:ETH-28NOV25-3000-P-USDT:P:3000:1764316800000:1|long:ETH-31OCT25-3300-P-USDT:P:3300:1761897600000:1|short:ETH-31OCT25-3500-P-USDT:P:3500:1761897600000:1": {
+        "xZoom": 0.5715302236126322,
+        "yZoom": 1,
+        "timePos": 0.226009762172902,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETHUSDT:C:0:0:1": {
+        "xZoom": 0.4234000033225345,
+        "yZoom": 1,
+        "timePos": 0,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETHUSDT:C:0:0:1|short:ETH-3OCT25-4600-C-USDT:C:4600:1759478400000:1": {
+        "xZoom": 2.744058180470132,
+        "yZoom": 1,
+        "timePos": 0.20347461932460117,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:short:ETH-26SEP25-4000-P:P:4000:1758873600000:1": {
+        "xZoom": 0.2,
+        "yZoom": 1,
+        "timePos": 0.0156566708524153,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true
+      },
+      "pv-v1:long:ETH-31OCT25-3800-P-USDT:P:3800:1761897600000:1": {
+        "xZoom": 5,
+        "yZoom": 1,
+        "timePos": 0.00006301024760459044,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-26SEP25-3800-P-USDT:P:3800:1758873600000:1|short:ETH-26SEP25-4000-P-USDT:P:4000:1758873600000:1": {
+        "xZoom": 2.744058180470131,
+        "yZoom": 1,
+        "timePos": 0.864290926908664,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:short:ETH-26SEP25-4300-P-USDT:P:4300:1758873600000:1|short:ETH-28NOV25-4700-C-USDT:C:4700:1764316800000:1|short:ETH-28NOV25-4800-P-USDT:P:4800:1764316800000:1": {
+        "xZoom": 0.36442376007810173,
+        "yZoom": 1,
+        "timePos": 0.14004460733329815,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-26SEP25-3900-P-USDT:P:3900:1758873600000:1|short:ETH-26SEP25-4000-P-USDT:P:4000:1758873600000:1": {
+        "xZoom": 0.42340000332253463,
+        "yZoom": 1,
+        "timePos": 0.03727436608459343,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": false
+      },
+      "pv-v1:long:ETH-31OCT25-4200-C-USDT:C:4200:1761897600000:1|long:ETH-31OCT25-4300-C-USDT:C:4300:1761897600000:1|short:ETH-31OCT25-4000-C-USDT:C:4000:1761897600000:1|short:ETH-31OCT25-4100-C-USDT:C:4100:1761897600000:1": {
+        "xZoom": 3.1881407581088665,
+        "yZoom": 1,
+        "timePos": 0.3123084345438161,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true,
+        "spotInterval": "1440"
+      },
+      "pv-v1:short:ETH-26SEP25-4500-P-USDT:P:4500:1758873600000:1": {
+        "xZoom": 0.2,
+        "yZoom": 1,
+        "timePos": 0.00036233106963735943,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true
+      },
+      "pv-v1:long:ETHUSDT:C:0:0:0.0111|short:ETH-26SEP25-4500-P-USDT:P:4500:1758873600000:1": {
+        "xZoom": 0.3136624370980337,
+        "yZoom": 1,
+        "timePos": 0.00925356809635469,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true
+      },
+      "pv-v1:long:ETHUSDT:C:0:0:1|short:ETH-26SEP25-4500-P-USDT:P:4500:1758873600000:1": {
+        "xZoom": 5,
+        "yZoom": 1,
+        "timePos": 0.00925356809635469,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETHUSDT:C:0:0:1|short:ETH-3OCT25-4300-C-USDT:C:4300:1759478400000:1": {
+        "xZoom": 1.8975471672717035,
+        "yZoom": 1,
+        "timePos": 0.714896848445674,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:short:ETHUSDT:C:0:0:1": {
+        "xZoom": 0.2699717615152006,
+        "yZoom": 1,
+        "timePos": 0.366299396344054,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-3OCT25-4700-C-USDT:C:4700:1759478400000:1|short:ETHUSDT:C:0:0:1": {
+        "xZoom": 0.36442376007810173,
+        "yZoom": 1,
+        "timePos": 0.18463461659899336,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-28NOV25-4700-C-USDT:C:4700:1764316800000:1|short:ETHUSDT:C:0:0:1": {
+        "xZoom": 0.664023384547309,
+        "yZoom": 1,
+        "timePos": 0.06900176093552292,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-31OCT25-3400-P-USDT:P:3400:1761897600000:1|short:ETH-31OCT25-3600-P-USDT:P:3600:1761897600000:1": {
+        "xZoom": 2.2046352761283186,
+        "yZoom": 1,
+        "timePos": 0.00001062747125951901,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true,
+        "spotInterval": "1440"
+      },
+      "pv-v1:long:ETH-31OCT25-3200-P-USDT:P:3200:1761897600000:1|short:ETH-31OCT25-3400-P-USDT:P:3400:1761897600000:1": {
+        "xZoom": 0.9602495431037684,
+        "yZoom": 1,
+        "timePos": 0.2158807138364504,
+        "ivShift": 0.01,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true,
+        "spotInterval": "1440"
+      },
+      "pv-v1:long:ETH-10OCT25-4200-C-USDT:C:4200:1760083200000:1|short:ETH-10OCT25-4600-C-USDT:C:4600:1760083200000:1": {
+        "xZoom": 2.032848298702993,
+        "yZoom": 1,
+        "timePos": 0.49394550504891804,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true,
+        "spotInterval": "1440"
+      },
+      "pv-v1:long:ETH-26DEC25-5200-C-USDT:C:5200:1766736000000:1|long:ETHUSDT:C:0:0:1|short:ETH-26DEC25-5600-C-USDT:C:5600:1766736000000:1": {
+        "xZoom": 0.5715302236126326,
+        "yZoom": 1,
+        "timePos": 0.721464903869142,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-26DEC25-5200-C-USDT:C:5200:1766736000000:1|long:ETHUSDT:C:0:0:1|short:ETH-26DEC25-5600-C-USDT:C:5600:1766736000000:1|short:ETH-28NOV25-4000-P-USDT:P:4000:1764316800000:1": {
+        "xZoom": 1.4057375161178578,
+        "yZoom": 1,
+        "timePos": 0.721464903869142,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-26DEC25-5200-C-USDT:C:5200:1766736000000:1|long:ETHUSDT:C:0:0:1|short:ETH-26DEC25-3200-C-USDT:C:3200:1766736000000:1|short:ETH-26DEC25-5600-C-USDT:C:5600:1766736000000:1": {
+        "xZoom": 0.2,
+        "yZoom": 1,
+        "timePos": 0.024552796056585714,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:short:ETH-26SEP25-4300-P-USDT:P:4300:1758873600000:1|short:ETH-28NOV25-4700-C-USDT:C:4700:1764316800000:1|short:ETH-28NOV25-4800-P-USDT:P:4800:1764316800000:1|short:ETH-3OCT25-4300-P-USDT:P:4300:1759478400000:1": {
+        "xZoom": 0.36442376007810173,
+        "yZoom": 1,
+        "timePos": 0.14004460733329815,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-26DEC25-4500-C-USDT:C:4500:1766736000000:1|short:ETH-26DEC25-4900-C-USDT:C:4900:1766736000000:1": {
+        "xZoom": 0.42340000332253463,
+        "yZoom": 1,
+        "timePos": 0.03727436608459343,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-26DEC25-4500-C-USDT:C:4500:1766736000000:1|short:ETH-26DEC25-4900-C-USDT:C:4900:1766736000000:1|short:ETH-31OCT25-3600-C-USDT:C:3600:1761897600000:1": {
+        "xZoom": 0.42340000332253463,
+        "yZoom": 1,
+        "timePos": 0.03727436608459343,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:short:ETH-26SEP25-4300-P-USDT:P:4300:1758873600000:1|short:ETH-28NOV25-4800-P-USDT:P:4800:1764316800000:1": {
+        "xZoom": 0.7714851061393946,
+        "yZoom": 1,
+        "timePos": 0.00006301024760459044,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": false
+      },
+      "pv-v1:short:ETH-26SEP25-4300-P-USDT:P:4300:1758873600000:1": {
+        "xZoom": 0.7714851061393946,
+        "yZoom": 1,
+        "timePos": 0.00006301024760459044,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": false
+      },
+      "pv-v1:long:ETHUSDT:C:0:0:1|short:ETH-28NOV25-4500-P-USDT:P:4500:1764316800000:1": {
+        "xZoom": 0.3644237600781014,
+        "yZoom": 1,
+        "timePos": 0,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-31OCT25-4000-P-USDT:P:4000:1761897600000:1|long:ETHUSDT:C:0:0:1": {
+        "xZoom": 1.7496887455557757,
+        "yZoom": 1,
+        "timePos": 0,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true,
+        "spotInterval": "1440"
+      },
+      "pv-v1:long:ETH-28NOV25-4700-C-USDT:C:4700:1764316800000:1|short:ETH-26SEP25-4300-P-USDT:P:4300:1758873600000:1": {
+        "xZoom": 2.744058180470132,
+        "yZoom": 1,
+        "timePos": 0.00006301024760459044,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-31OCT25-5000-C-USDT:C:5000:1761897600000:1|long:ETH-3OCT25-4200-P-USDT:P:4200:1759478400000:1|short:ETHUSDT:C:0:0:1": {
+        "xZoom": 2.3618327637050727,
+        "yZoom": 1,
+        "timePos": 0.138737547213917,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-10OCT25-7000-P-USDT:P:7000:1760083200000:1|short:ETHUSDT:C:0:0:1": {
+        "xZoom": 1.296201303229455,
+        "yZoom": 1,
+        "timePos": 0.0000094386524470114,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETHUSDT:C:0:0:1|short:ETH-17OCT25-4000-C-USDT:C:4000:1760688000000:1": {
+        "xZoom": 2.7440581804701294,
+        "yZoom": 1,
+        "timePos": 0.0000094386524470114,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true,
+        "spotInterval": "1440"
+      },
+      "pv-v1:long:ETH-17OCT25-3500-C-USDT:C:3500:1760688000000:1|long:ETH-17OCT25-3500-P-USDT:P:3500:1760688000000:1|short:ETH-17OCT25-3800-C-USDT:C:3800:1760688000000:1|short:ETH-17OCT25-3800-P-USDT:P:3800:1760688000000:1": {
+        "xZoom": 1.7496887455557726,
+        "yZoom": 1,
+        "timePos": 0.00003061965332309626,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-17OCT25-3800-P-USDT:P:3800:1760688000000:1|long:ETH-17OCT25-4000-C-USDT:C:4000:1760688000000:1|short:ETH-17OCT25-3800-C-USDT:C:3800:1760688000000:1|short:ETH-17OCT25-4000-P-USDT:P:4000:1760688000000:1": {
+        "xZoom": 2.7440581804701254,
+        "yZoom": 1,
+        "timePos": 0.00014307037916130833,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-17OCT25-4000-C-USDT:C:4000:1760688000000:1|long:ETH-17OCT25-4000-P-USDT:P:4000:1760688000000:1|short:ETH-17OCT25-3800-C-USDT:C:3800:1760688000000:1|short:ETH-17OCT25-3800-P-USDT:P:3800:1760688000000:1": {
+        "xZoom": 2.3618327637050736,
+        "yZoom": 1,
+        "timePos": 0.00014307037916130833,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-31OCT25-3700-P-USDT:P:3700:1761897600000:1|long:ETH-31OCT25-4400-C-USDT:C:4400:1761897600000:1|short:ETH-31OCT25-3800-P-USDT:P:3800:1761897600000:1|short:ETH-31OCT25-4300-C-USDT:C:4300:1761897600000:1": {
+        "xZoom": 2.032848298702993,
+        "yZoom": 1,
+        "timePos": 0.1273376472774012,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-17OCT25-3500-P-USDT:P:3500:1760688000000:1|long:ETH-17OCT25-3800-C-USDT:C:3800:1760688000000:1": {
+        "xZoom": 2.0328482987029957,
+        "yZoom": 1,
+        "timePos": 0.061683363709913744,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-17OCT25-4000-C-USDT:C:4000:1760688000000:1|long:ETH-17OCT25-4000-P-USDT:P:4000:1760688000000:1": {
+        "xZoom": 2.0328482987029957,
+        "yZoom": 1,
+        "timePos": 0.061683363709913744,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-17OCT25-3800-P-USDT:P:3800:1760688000000:1|long:ETH-17OCT25-4500-C-USDT:C:4500:1760688000000:1": {
+        "xZoom": 2.0328482987029957,
+        "yZoom": 1,
+        "timePos": 0.312011688642164,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-17OCT25-4000-P-USDT:P:4000:1760688000000:1|long:ETH-17OCT25-4200-C-USDT:C:4200:1760688000000:1": {
+        "xZoom": 2.0328482987029957,
+        "yZoom": 1,
+        "timePos": 1,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-17OCT25-4000-P-USDT:P:4000:1760688000000:0.1|long:ETH-17OCT25-4200-C-USDT:C:4200:1760688000000:0.1": {
+        "xZoom": 2.2046352761283177,
+        "yZoom": 1,
+        "timePos": 0.115674026366753,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true,
+        "spotInterval": "1440"
+      },
+      "pv-v1:long:ETH-31OCT25-4500-C-USDT:C:4500:1761897600000:0.1|short:ETH-31OCT25-5000-C-USDT:C:5000:1761897600000:0.1": {
+        "xZoom": 2.3618327637050713,
+        "yZoom": 1,
+        "timePos": 0.033403248656451445,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true,
+        "spotInterval": "60"
+      },
+      "pv-v1:long:ETH-31OCT25-4500-C-USDT:C:4500:1761897600000:0.1": {
+        "xZoom": 1.115650800742149,
+        "yZoom": 1,
+        "timePos": 0.033403248656451445,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true
+      },
+      "pv-v1:long:ETH-24OCT25-5000-C-USDT:C:5000:1761292800000:0.1": {
+        "xZoom": 1.1156508007421486,
+        "yZoom": 1,
+        "timePos": 0.033403248656451445,
+        "ivShift": 0,
+        "rPct": 0,
+        "showT0": true,
+        "showExpiry": true,
+        "useExecPnl": true,
+        "spotInterval": "240"
+      }
+    }
+  },
+  "portfolios": [
+    {
+      "id": "default",
+      "name": "Default",
+      "createdAt": 1759502582740,
+      "updatedAt": 1759645986753
+    },
+    {
+      "id": "bb914426-f82d-4d2e-af64-b2c11bf0f91a",
+      "name": "Combos",
+      "createdAt": 1759504774617,
+      "updatedAt": 1759504788917
+    },
+    {
+      "id": "10c0d7e9-b4cd-41b3-8400-58ba5667daa8",
+      "name": "Work",
+      "createdAt": 1759509954354,
+      "updatedAt": 1759516178608
+    }
+  ],
+  "activePortfolioId": "default"
+}

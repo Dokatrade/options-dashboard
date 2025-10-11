@@ -33,9 +33,26 @@ type Props = {
   hiddenSymbols?: string[];
   onEdit?: () => void;
   onDeleteLeg?: (legIndex: number) => void;
+  variant?: 'modal' | 'summary';
 };
 
-export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, note, title, onClose, onClosePosition, onToggleLegHidden, hiddenSymbols, onEdit, onDeleteLeg }: Props) {
+export function PositionView({
+  id,
+  legs,
+  createdAt,
+  closedAt,
+  closeSnapshot,
+  note,
+  title,
+  onClose,
+  onClosePosition,
+  onToggleLegHidden,
+  hiddenSymbols,
+  onEdit,
+  onDeleteLeg,
+  variant = 'modal',
+}: Props) {
+  const isSummary = variant === 'summary';
   const updateSpread = useStore((s) => s.updateSpread);
   const updatePosition = useStore((s) => s.updatePosition);
   const storeSpread = useStore(React.useCallback((s) => id.startsWith('S:') ? s.spreads.find((sp) => `S:${sp.id}` === id) : undefined, [id]));
@@ -301,6 +318,7 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
   
   // Initialize modal position (center horizontally; slight offset from top)
   React.useLayoutEffect(() => {
+    if (isSummary) return;
     if (pos != null) return;
     const el = containerRef.current;
     const w = el?.offsetWidth ?? 900;
@@ -309,9 +327,10 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
     const y = Math.max(12, Math.round((window.innerHeight - h) / 5));
     setPos({ x, y });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerRef.current]);
+  }, [containerRef.current, isSummary, pos]);
   // Drag handlers bound to window so we can drag smoothly
   React.useEffect(() => {
+    if (isSummary) return () => {};
     const onMove = (e: MouseEvent) => {
       const d = draggingRef.current; if (!d) return;
       const el = containerRef.current;
@@ -329,7 +348,7 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-  }, []);
+  }, [isSummary]);
   // Spot price comes from option index price (per-leg underlying)
 
 
@@ -786,23 +805,51 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
     if (window.confirm('Exit this item?')) onClosePosition();
   }, [canClosePosition, onClosePosition]);
 
-  return (
-    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.45)', zIndex:70}}>
+  const containerStyle: React.CSSProperties = isSummary
+    ? {
+        background: 'var(--card)',
+        color: 'var(--fg)',
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+        width: '100%',
+        maxWidth: 960,
+        margin: '0 auto',
+        overflow: 'visible',
+      }
+    : {
+        position: 'absolute',
+        left: Math.max(0, pos?.x ?? 0),
+        top: Math.max(0, pos?.y ?? 0),
+        background: 'var(--card)',
+        color: 'var(--fg)',
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+        width: 900,
+        maxWidth: '95%',
+        maxHeight: '90%',
+        overflow: 'auto',
+        overscrollBehavior: 'contain',
+        boxShadow: '0 10px 24px rgba(0,0,0,.35)',
+      };
+
+  const card = (
       <div
         ref={containerRef}
-        style={{
-          position:'absolute',
-          left: Math.max(0, pos?.x ?? 0),
-          top: Math.max(0, pos?.y ?? 0),
-          background:'var(--card)', color:'var(--fg)', border:'1px solid var(--border)', borderRadius:12,
-          width:900, maxWidth:'95%', maxHeight:'90%', overflow:'auto', overscrollBehavior:'contain', boxShadow:'0 10px 24px rgba(0,0,0,.35)'
-        }}
+        style={containerStyle}
         data-position-id={id}
       >
         <div
-          style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 16px', borderBottom:'1px solid var(--border)', cursor:'move', userSelect: draggingRef.current ? 'none' as const : undefined}}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '12px 16px',
+            borderBottom: '1px solid var(--border)',
+            cursor: isSummary ? 'default' : 'move',
+            userSelect: !isSummary && draggingRef.current ? 'none' : undefined,
+          }}
           onMouseDown={(e) => {
-            if (!pos) return;
+            if (isSummary || !pos) return;
             const target = e.target as HTMLElement;
             if (target && target.closest('button, input, select, textarea, a')) return;
             draggingRef.current = { startX: e.clientX, startY: e.clientY, startPos: { ...pos } };
@@ -824,7 +871,9 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
             {canClosePosition && (
               <button className="ghost" onClick={handleClosePosition}>Exit</button>
             )}
-            <button className="ghost" onClick={onClose} aria-label="Close view">Close</button>
+            {!isSummary && (
+              <button className="ghost" onClick={onClose} aria-label="Close view">Close</button>
+            )}
           </div>
         </div>
         <div style={{padding:12}}>
@@ -1412,6 +1461,19 @@ export function PositionView({ id, legs, createdAt, closedAt, closeSnapshot, not
           )}
         </div>
       </div>
+  );
+
+  if (isSummary) {
+    return (
+      <div style={{ padding: '12px 0 24px' }}>
+        {card}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.45)', zIndex:70}}>
+      {card}
     </div>
   );
 }
