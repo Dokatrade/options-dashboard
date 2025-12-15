@@ -1,7 +1,7 @@
 import React from 'react';
 import { useStore, DEFAULT_PORTFOLIO_ID } from '../store/store';
-import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
-import { midPrice, bestBidAsk, fetchOptionTickers, fetchHV30, fetchOrderbookL1, fetchSpotEth, fetchOptionDeliveryPrice } from '../services/bybit';
+import { subscribeLinearTicker, subscribeOptionTicker } from '../services/ws';
+import { midPrice, bestBidAsk, fetchOptionTickers, fetchHV30, fetchOrderbookL1, fetchPerpEth, fetchOptionDeliveryPrice } from '../services/bybit';
 import type { HV30Stats } from '../services/bybit';
 import { bsImpliedVol } from '../utils/bs';
 import type { Position, PositionLeg, SpreadPosition, SettlementMap, CloseSnapshot } from '../utils/types';
@@ -12,6 +12,7 @@ import { EditPositionModal } from './EditPositionModal';
 import { IfModal, IfRule, IfCond, IfOperand, IfSide, IfComparator, IfChain, IfConditionTemplate, migrateRule } from './IfModal';
 import { AddPositionModal } from './AddPositionModal';
 import { useSlowMode } from '../contexts/SlowModeContext';
+import { legKey } from '../utils/legKey';
 
 function formatCreatedAtLabel(createdAt?: number): string | null {
   if (!Number.isFinite(createdAt)) return null;
@@ -19,7 +20,7 @@ function formatCreatedAtLabel(createdAt?: number): string | null {
   if (Number.isNaN(dt.getTime())) return null;
   const datePart = dt.toLocaleDateString('ru-RU');
   const timePart = dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase();
-  return `(created ${datePart} | ${timePart})`;
+  return `(created ${datePart} ${timePart})`;
 }
 
 type Row = {
@@ -51,6 +52,8 @@ type LegSnapshot = PositionLeg & {
   settleS?: number;
   settledAt?: number;
   settled?: boolean;
+  exitPrice?: number;
+  exitedAt?: number;
 };
 
 type ColumnKey =
@@ -195,6 +198,10 @@ export function UnifiedPositionsTable() {
   const [hideExpired, setHideExpired] = React.useState(true);
   const [useExecPnl, setUseExecPnl] = React.useState(true);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
+  const tickersRef = React.useRef<Record<string, any>>({});
+  React.useEffect(() => {
+    tickersRef.current = tickers;
+  }, [tickers]);
   const [view, setView] = React.useState<Row | null>(null);
   const [editId, setEditId] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
@@ -302,12 +309,6 @@ export function UnifiedPositionsTable() {
   const handlePortfolioSelect = React.useCallback((event: React.ChangeEvent<HTMLSelectElement>) => {
     setActivePortfolio(event.target.value);
   }, [setActivePortfolio]);
-  const prevPortfolioIdRef = React.useRef(activePortfolioId);
-  React.useEffect(() => {
-    if (prevPortfolioIdRef.current === activePortfolioId) return;
-    prevPortfolioIdRef.current = activePortfolioId;
-    manualRefresh().catch(() => {});
-  }, [activePortfolioId, manualRefresh]);
 
   const DEFAULT_ACTION_VISIBILITY: Record<ActionKey, boolean> = React.useMemo(() => ({
     favorite: true,
@@ -606,6 +607,12 @@ export function UnifiedPositionsTable() {
     rowsRef.current = rows;
     void runAutoSettle();
   }, [rows, runAutoSettle]);
+  const prevPortfolioIdRef = React.useRef(activePortfolioId);
+  React.useEffect(() => {
+    if (prevPortfolioIdRef.current === activePortfolioId) return;
+    prevPortfolioIdRef.current = activePortfolioId;
+    manualRefresh().catch(() => {});
+  }, [activePortfolioId, manualRefresh]);
 
   React.useEffect(() => {
     const timer = setInterval(() => {
@@ -623,7 +630,9 @@ export function UnifiedPositionsTable() {
         if (typeof value === 'number' && Number.isNaN(value)) continue;
         merged[key] = value;
       }
-      return { ...prev, [sym]: merged };
+      const next = { ...prev, [sym]: merged };
+      tickersRef.current = next;
+      return next;
     });
   }, []);
 
@@ -631,7 +640,7 @@ export function UnifiedPositionsTable() {
     const limited = symbols.slice(0, 180);
     await Promise.all(limited.map((sym) => new Promise<void>((resolve) => {
       let resolved = false;
-      const stop = (sym.includes('-') ? subscribeOptionTicker : subscribeSpotTicker)(sym, (t) => {
+      const stop = (sym.includes('-') ? subscribeOptionTicker : subscribeLinearTicker)(sym, (t) => {
         if (resolved) return;
         resolved = true;
         mergeTickerUpdate(sym, t as Record<string, any>);
@@ -647,13 +656,80 @@ export function UnifiedPositionsTable() {
     })));
   }, [mergeTickerUpdate]);
 
+  const handleExitLeg = React.useCallback(async (row: Row, legIndex: number): Promise<boolean> => {
+    if (!row.id.startsWith('P:')) return false;
+    const leg = row.legs[legIndex];
+    if (!leg) return false;
+    if (leg.exitPrice != null && isFinite(Number(leg.exitPrice))) {
+      window.alert('This leg is already exited.');
+      return false;
+    }
+
+    const symbol = String(leg.leg.symbol || '');
+    const expiryMs = Number(leg.leg.expiryMs) || 0;
+    const isPerp = !symbol.includes('-') || expiryMs <= 0;
+
+    if (symbol) {
+      try { await captureRealtimeSnapshot([symbol]); } catch {}
+    }
+
+    const toNumber = (v: any) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const ticker = tickersRef.current[symbol] || {};
+    const { bid, ask } = bestBidAsk(ticker);
+    const bidNum = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
+    const askNum = ask != null && isFinite(Number(ask)) ? Number(ask) : undefined;
+    const markNum = toNumber((ticker as any)?.markPrice);
+    const lastNum = toNumber((ticker as any)?.lastPrice);
+    const midRaw = midPrice(ticker);
+    const midMarket = midRaw != null && isFinite(Number(midRaw)) ? Number(midRaw) : undefined;
+    const entry = Number(leg.entryPrice) || 0;
+    const closePrice = leg.side === 'long' ? bidNum : askNum;
+    const execPrice = closePrice ?? midMarket ?? markNum ?? lastNum ?? entry;
+    if (!(execPrice != null && isFinite(execPrice))) {
+      window.alert('No executable price available for this leg right now.');
+      return false;
+    }
+    const action = leg.side === 'long' ? 'sell to close' : 'buy to close';
+    const legLabel = isPerp ? `${leg.side} ${symbol}` : `${leg.side} ${leg.leg.optionType}${leg.leg.strike}`;
+    let priceHint = '';
+    if (!isPerp) {
+      const bidNote = bidNum != null ? bidNum.toFixed(4) : '—';
+      const askNote = askNum != null ? askNum.toFixed(4) : '—';
+      const markNote = markNum != null ? markNum.toFixed(4) : undefined;
+      const lastNote = lastNum != null ? lastNum.toFixed(4) : undefined;
+      const parts: string[] = [];
+      parts.push(`bid ${bidNote} / ask ${askNote}`);
+      if (markNote) parts.push(`mark ${markNote}`);
+      if (lastNote) parts.push(`last ${lastNote}`);
+      priceHint = parts.length ? ` (${parts.join(' · ')})` : '';
+    }
+    if (!window.confirm(`Exit leg ${legLabel}? Will ${action} at ~${execPrice.toFixed(4)}${priceHint}.`)) return false;
+    const exitedAt = Date.now();
+    const pid = row.id.slice(2);
+    updatePosition(pid, (p) => ({
+      ...p,
+      legs: p.legs.map((L, idx) => idx === legIndex ? { ...L, exitPrice: execPrice, exitedAt } : L),
+    }));
+    setView((current) => {
+      if (!current || current.id !== row.id) return current;
+      return {
+        ...current,
+        legs: current.legs.map((L, idx) => idx === legIndex ? { ...L, exitPrice: execPrice, exitedAt } : L),
+      };
+    });
+    return true;
+  }, [captureRealtimeSnapshot, updatePosition, setView]);
+
   const performSlowRefresh = React.useCallback(async () => {
     const rowsSnapshot = rowsRef.current;
     if (!rowsSnapshot.length) return;
 
-    const [list, spotData] = await Promise.all([
+    const [list, perpData] = await Promise.all([
       fetchOptionTickers(),
-      fetchSpotEth().catch(() => undefined),
+      fetchPerpEth().catch(() => undefined),
     ]);
     const map = new Map(list.map((t) => [t.symbol, t]));
 
@@ -671,21 +747,32 @@ export function UnifiedPositionsTable() {
         }
         next[sym] = merged;
       }));
-      if (spotData?.price != null && isFinite(spotData.price)) {
-        const price = Number(spotData.price);
+      const perp = perpData || {};
+      const mark = Number.isFinite(perp.markPrice) ? Number(perp.markPrice) : undefined;
+      const last = Number.isFinite(perp.lastPrice) ? Number(perp.lastPrice) : undefined;
+      const idx = Number.isFinite(perp.indexPrice) ? Number(perp.indexPrice) : undefined;
+      const bid = Number.isFinite(perp.bid) ? Number(perp.bid) : undefined;
+      const ask = Number.isFinite(perp.ask) ? Number(perp.ask) : undefined;
+      const price = Number.isFinite(perp.price) ? Number(perp.price) : undefined;
+      if (mark != null || last != null || idx != null || bid != null || ask != null || price != null) {
         const existing = next['ETHUSDT'] || {};
+        const anchor = mark ?? last ?? price ?? idx ?? existing.markPrice ?? existing.lastPrice;
         next['ETHUSDT'] = {
           ...existing,
-          markPrice: price,
-          indexPrice: price,
-          bid1Price: existing.bid1Price ?? price,
-          ask1Price: existing.ask1Price ?? price,
+          markPrice: mark ?? anchor ?? existing.markPrice,
+          lastPrice: last ?? existing.lastPrice,
+          indexPrice: idx ?? anchor ?? existing.indexPrice,
+          bid1Price: bid ?? existing.bid1Price ?? anchor,
+          ask1Price: ask ?? existing.ask1Price ?? anchor,
         };
       }
+      tickersRef.current = next;
       return next;
     });
 
-    const syms = Array.from(new Set(rowsSnapshot.flatMap(r => r.legs.map(L => L.leg.symbol)))).slice(0, 200);
+    const syms = Array.from(new Set(rowsSnapshot.flatMap(r => r.legs.map(L => L.leg.symbol))))
+      .filter((sym) => sym.includes('-'))
+      .slice(0, 200);
     const chunkSize = 25;
     for (let i = 0; i < syms.length; i += chunkSize) {
       const chunk = syms.slice(i, i + chunkSize);
@@ -706,6 +793,7 @@ export function UnifiedPositionsTable() {
         for (const [sym, { bid, ask }] of Object.entries(updates)) {
           next[sym] = { ...(next[sym] || {}), obBid: bid, obAsk: ask };
         }
+        tickersRef.current = next;
         return next;
       });
     }
@@ -735,7 +823,7 @@ export function UnifiedPositionsTable() {
     rows.forEach(r => r.legs.forEach(l => symbols.add(l.leg.symbol)));
     const unsubs = Array.from(symbols).slice(0, 1000).map(sym => {
       const isOption = sym.includes('-');
-      const sub = isOption ? subscribeOptionTicker : subscribeSpotTicker;
+      const sub = isOption ? subscribeOptionTicker : subscribeLinearTicker;
       return sub(sym, (t) => setTickers(prev => {
         const cur = prev[t.symbol] || {};
         const merged: any = { ...cur };
@@ -744,7 +832,9 @@ export function UnifiedPositionsTable() {
           const v: any = (t as any)[k];
           if (v != null && !(Number.isNaN(v))) (merged as any)[k] = v;
         }
-        return { ...prev, [t.symbol]: merged };
+        const next = { ...prev, [t.symbol]: merged };
+        tickersRef.current = next;
+        return next;
       }));
     });
     return () => { unsubs.forEach(u => u()); };
@@ -756,10 +846,12 @@ export function UnifiedPositionsTable() {
     fetchHV30().then(v => { if (mounted) setHvStats(v); }).catch(()=>{});
     return () => { mounted = false; };
   }, []);
-  // Subscribe real spot (ETHUSDT) for IF rules only
+  // Subscribe perp (ETHUSDT) for IF rules only
   React.useEffect(() => {
-    const unsub = subscribeSpotTicker('ETHUSDT', (t) => {
-      const p = (t.lastPrice != null && isFinite(Number(t.lastPrice))) ? Number(t.lastPrice) : (t.markPrice != null ? Number(t.markPrice) : undefined);
+    const unsub = subscribeLinearTicker('ETHUSDT', (t) => {
+      const p = (t.markPrice != null && isFinite(Number(t.markPrice)))
+        ? Number(t.markPrice)
+        : (t.lastPrice != null && isFinite(Number(t.lastPrice)) ? Number(t.lastPrice) : undefined);
       if (p != null && isFinite(p)) setIfSpot(p);
     });
     return () => { try { unsub(); } catch {} };
@@ -823,10 +915,11 @@ export function UnifiedPositionsTable() {
     let unsettled = false;
     for (const L of optionLegs) {
       const expiryMs = Number(L.leg.expiryMs) || 0;
+      const exited = L.exitPrice != null && isFinite(Number(L.exitPrice));
       if (expiryMs > 0 && expiryMs <= now) {
         expiredCount++;
         expiredKeys.add(expiryMs);
-        if (!settlementForLeg(r, L)) unsettled = true;
+        if (!settlementForLeg(r, L) && !exited) unsettled = true;
       }
     }
     if (!expiredCount) return { state: 'active' as const, unsettled: false, expiredExpiries: [] as number[] };
@@ -839,12 +932,53 @@ export function UnifiedPositionsTable() {
   }
 
   function computeLegSnapshot(r: Row, L: PositionLeg) {
+    const toNumber = (v: any) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
     const ticker = tickers[L.leg.symbol] || {};
     const qty = Number(L.qty) || 1;
     const entry = Number(L.entryPrice) || 0;
+    const exitPriceRaw = Number((L as any)?.exitPrice);
+    const exitPrice = Number.isFinite(exitPriceRaw) ? exitPriceRaw : undefined;
+    const exitedAtRaw = Number((L as any)?.exitedAt);
+    const exitedAt = Number.isFinite(exitedAtRaw) ? exitedAtRaw : undefined;
     const settlement = settlementForLeg(r, L);
     const isPerp = !String(L.leg.symbol || '').includes('-');
     const strike = Number(L.leg.strike) || 0;
+    const { bid, ask } = bestBidAsk(ticker);
+    const bidNum = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
+    const askNum = ask != null && isFinite(Number(ask)) ? Number(ask) : undefined;
+    const markNum = toNumber((ticker as any)?.markPrice);
+    const lastNum = toNumber((ticker as any)?.lastPrice);
+    const midRaw = midPrice(ticker);
+    const midMarket = midRaw != null && isFinite(Number(midRaw)) ? Number(midRaw) : undefined;
+    const mid = midMarket ?? entry;
+    const execCandidate = (() => {
+      if (L.side === 'short') return askNum ?? midMarket ?? markNum ?? lastNum ?? entry;
+      return bidNum ?? midMarket ?? markNum ?? lastNum ?? entry;
+    })();
+    let exec = execCandidate;
+    if (!(exec != null && isFinite(exec))) exec = mid;
+    if (exitPrice != null) {
+      const pnl = (L.side === 'short' ? (entry - exitPrice) : (exitPrice - entry)) * qty;
+      return {
+        bid: undefined,
+        ask: undefined,
+        mid: exitPrice,
+        exec: exitPrice,
+        spread: undefined,
+        oi: undefined,
+        pnlMid: pnl,
+        pnlExec: pnl,
+        greeks: { delta: 0, gamma: 0, vega: 0, theta: 0 },
+        settleS: undefined,
+        settledAt: exitedAt,
+        settled: true,
+        exitPrice,
+        exitedAt,
+      };
+    }
     if (settlement) {
       const settleS = settlement.settleUnderlying;
       const price = isPerp ? settleS : (L.leg.optionType === 'C' ? Math.max(0, settleS - strike) : Math.max(0, strike - settleS));
@@ -867,17 +1001,11 @@ export function UnifiedPositionsTable() {
       };
     }
 
-    const { bid, ask } = bestBidAsk(ticker);
-    const bidNum = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
-    const askNum = ask != null && isFinite(Number(ask)) ? Number(ask) : undefined;
-    const midRaw = midPrice(ticker);
-    const mid = midRaw != null && isFinite(Number(midRaw)) ? Number(midRaw) : 0;
-    let exec = L.side === 'short' ? (askNum ?? mid) : (bidNum ?? mid);
-    if (!(exec != null && isFinite(exec))) exec = mid;
     const pnlMid = (L.side === 'short' ? (entry - mid) : (mid - entry)) * qty;
     const pnlExec = (L.side === 'short' ? (entry - exec) : (exec - entry)) * qty;
+    const delta = ticker?.delta != null ? Number(ticker.delta) : (isPerp ? 1 : 0);
     const greeks = {
-      delta: ticker?.delta != null ? Number(ticker.delta) : 0,
+      delta,
       gamma: ticker?.gamma != null ? Number(ticker.gamma) : 0,
       vega: ticker?.vega != null ? Number(ticker.vega) : 0,
       theta: ticker?.theta != null ? Number(ticker.theta) : 0,
@@ -892,12 +1020,14 @@ export function UnifiedPositionsTable() {
       spread,
       oi,
       pnlMid,
-      pnlExec,
-      greeks,
-      settleS: undefined,
-      settledAt: undefined,
-      settled: false,
-    };
+        pnlExec,
+        greeks,
+        settleS: undefined,
+        settledAt: undefined,
+        settled: false,
+        exitPrice: undefined,
+        exitedAt: undefined,
+      };
   }
   const ivPctForLeg = (L: PositionLeg, r: Row): number | undefined => {
     if (settlementForLeg(r, L)) return undefined;
@@ -1027,6 +1157,8 @@ export function UnifiedPositionsTable() {
     settleS?: number;
     settledAt?: number;
     settled?: boolean;
+    exitPrice?: number;
+    exitedAt?: number;
   };
 
   const ensureMaxProfit = (ctx: PositionEvalContext): number | undefined => {
@@ -1098,6 +1230,8 @@ export function UnifiedPositionsTable() {
       settleS: snap.settleS,
       settledAt: snap.settledAt,
       settled: snap.settled,
+      exitPrice: snap.exitPrice,
+      exitedAt: snap.exitedAt,
     };
   };
 
@@ -1319,6 +1453,7 @@ export function UnifiedPositionsTable() {
             }
             next[sym] = merged;
           }));
+          tickersRef.current = next;
           return next;
         });
       } catch {}
@@ -1333,13 +1468,19 @@ export function UnifiedPositionsTable() {
     if (slowMode) return;
     let stopped = false;
     const poll = async () => {
-      const syms = Array.from(new Set(rows.flatMap(r => r.legs.map(L => L.leg.symbol)))).slice(0, 120);
+      const syms = Array.from(new Set(rows.flatMap(r => r.legs.map(L => L.leg.symbol))))
+        .filter((sym) => sym.includes('-'))
+        .slice(0, 120);
       for (const sym of syms) {
         if (stopped) return;
         try {
           const { bid, ask } = await fetchOrderbookL1(sym);
           if (bid != null || ask != null) {
-            setTickers(prev => ({ ...prev, [sym]: { ...(prev[sym] || {}), obBid: bid, obAsk: ask } }));
+            setTickers(prev => {
+              const next = { ...prev, [sym]: { ...(prev[sym] || {}), obBid: bid, obAsk: ask } };
+              tickersRef.current = next;
+              return next;
+            });
           }
         } catch {}
       }
@@ -1503,6 +1644,23 @@ export function UnifiedPositionsTable() {
     const snapshot = buildCloseSnapshot(r);
     applyCloseSnapshot(r, snapshot);
   };
+
+  const formatPerpExitLines = React.useCallback((r: Row): string[] => {
+    const lines: string[] = [];
+    r.legs.forEach((L, idx) => {
+      const sym = String(L.leg.symbol || '');
+      if (!sym || sym.includes('-')) return;
+      const t = tickers[sym] || {};
+      const { bid, ask } = bestBidAsk(t);
+      const price = L.side === 'long' ? bid : ask;
+      const display = (price != null && isFinite(Number(price))) ? Number(price).toFixed(2) : 'n/a';
+      const label = L.side === 'long' ? 'bid' : 'ask';
+      const qty = Number(L.qty) || 1;
+      const qtyLabel = Number.isFinite(qty) ? `×${qty}` : '';
+      lines.push(`${L.side === 'short' ? 'Short' : 'Long'} ${sym} ${qtyLabel} @ ${label} ${display}`);
+    });
+    return lines;
+  }, [tickers]);
   const onDeleteRow = (r: Row) => {
     if (r.id.startsWith('S:')) removeSpread(r.id.slice(2)); else removePosition(r.id.slice(2));
   };
@@ -1922,7 +2080,11 @@ export function UnifiedPositionsTable() {
                                     }}
                                     onClick={() => {
                                       if (r.closedAt != null) return;
-                                      if (window.confirm('Exit this item?')) onCloseRow(r);
+                                      const perpLines = formatPerpExitLines(r);
+                                      const message = perpLines.length
+                                        ? `Exit this item?\n${perpLines.join('\n')}`
+                                        : 'Exit this item?';
+                                      if (window.confirm(message)) onCloseRow(r);
                                     }}
                                     disabled={r.closedAt != null}
                                   >Exit</button>
@@ -1969,9 +2131,20 @@ export function UnifiedPositionsTable() {
                             const ivLive = snap.settled ? undefined : ivPctForLeg(L, r);
                             const volShift = snap.settled ? undefined : dSigmaForLeg(L, r);
                             const oi = snap.oi;
+                            const symbol = String(L.leg.symbol || '');
+                            const expiryMs = Number(L.leg.expiryMs) || 0;
+                            const isPerp = !symbol.includes('-') || expiryMs <= 0;
+                            const usdNotional = isPerp && isFinite(qty) ? qty * (mid ?? entry ?? 0) : undefined;
+                            const legId = legKey(L, i);
+                            const isExited = L.exitPrice != null && isFinite(Number(L.exitPrice));
+                            const exitPrice = Number(L.exitPrice);
+                            const exitedAt = Number(L.exitedAt);
+                            const exitTooltip = isExited
+                              ? `Exited at ${exitPrice.toFixed(4)}${Number.isFinite(exitedAt) ? ` · ${new Date(exitedAt).toLocaleString()}` : ''}`
+                              : 'Exit only this leg (sell/buy back)';
                             return (
                               <div
-                                key={L.leg.symbol}
+                                key={legId}
                                 style={{
                                   border: '2px solid #10481B',
                                   borderRadius: 8,
@@ -1981,14 +2154,15 @@ export function UnifiedPositionsTable() {
                                   ...(matchedLegs.has(L.leg.symbol) ? { background: 'rgba(64,64,64,.20)' } : {}),
                                 }}
                               >
-                                <div style={{display:'flex', justifyContent:'space-between', marginBottom: 2}}>
+                                  <div style={{display:'flex', justifyContent:'space-between', marginBottom: 2}}>
                                   <div style={{display:'flex', alignItems:'center', gap:8}}>
                                     <button type="button" className="ghost" style={{height: 22, lineHeight: '22px', padding: '0 8px', cursor:'pointer'}} onClick={(e) => { e.stopPropagation();
                                       if (r.id.startsWith('P:')) {
                                         const pid = r.id.slice(2);
+                                        const targetLegId = legKey(L, i);
                                         updatePosition(pid, (p) => ({
                                           ...p,
-                                          legs: p.legs.map(LL => LL.leg.symbol === L.leg.symbol ? { ...LL, hidden: !LL.hidden } : LL)
+                                          legs: p.legs.map((LL, idx) => legKey(LL, idx) === targetLegId ? { ...LL, hidden: !LL.hidden } : LL)
                                         }));
                                       } else if (r.id.startsWith('S:')) {
                                         try {
@@ -1996,50 +2170,85 @@ export function UnifiedPositionsTable() {
                                           const latest = useStore.getState().positions?.[0]?.id;
                                           removeSpread(r.id.slice(2));
                                           if (latest) {
+                                            const targetLegId = legKey(L, i);
                                             updatePosition(latest, (p) => ({
                                               ...p,
-                                              legs: p.legs.map(LL => LL.leg.symbol === L.leg.symbol ? { ...LL, hidden: true } : LL)
+                                              legs: p.legs.map((LL, idx) => legKey(LL, idx) === targetLegId ? { ...LL, hidden: true } : LL)
                                             }));
                                             // expand the newly created position row
                                             setExpanded(prev => ({ ...prev, ['P:'+latest]: true }));
-                                          }
-                                        } catch {}
-                                      }
-                                    }}>{L.hidden ? 'Unhide' : 'Hide'}</button>
+                                        }
+                                      } catch {}
+                                    }
+                                  }}>{L.hidden ? 'Unhide' : 'Hide'}</button>
                                     <div>
-                                      <strong>{L.side}</strong> {L.leg.optionType} {L.leg.strike} × {L.qty}
-                                      {(() => {
-                                        const label = formatCreatedAtLabel(L.createdAt ?? r.createdAt);
-                                        return label ? (
-                                          <span style={{ marginLeft: 6, color: '#9c9c9c', fontSize: 'calc(1em - 1px)' }}>{label}</span>
-                                        ) : null;
-                                      })()}
+                                      <strong>{L.side}</strong> {L.leg.optionType} {L.leg.strike} × {L.qty}{isPerp && usdNotional != null && isFinite(usdNotional) ? ` ($${usdNotional.toFixed(0)})` : ''}
                                     </div>
                                   </div>
                                   <div style={{display:'flex', alignItems:'center', gap:6}}>
                                     <div className="muted">{Number(L.leg.expiryMs) > 0 ? new Date(Number(L.leg.expiryMs)).toISOString().slice(0,10) : ''}</div>
                                     {r.id.startsWith('P:') && (
-                                      <button
-                                        type="button"
-                                        className="ghost"
-                                        style={{height: 22, lineHeight: '22px', padding: '0 8px', cursor:'pointer'}}
-                                        onClick={(e) => { e.stopPropagation(); handleDeleteLeg(r, i); }}
-                                      >Del</button>
+                                      <>
+                                        <button
+                                          type="button"
+                                          className="ghost"
+                                          title={exitTooltip}
+                                          style={{
+                                            height: 22,
+                                            lineHeight: '22px',
+                                            padding: '0 8px',
+                                            cursor: isExited ? 'not-allowed' : 'pointer',
+                                            color: isExited ? '#9ba0a6' : undefined,
+                                          }}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (isExited) return;
+                                            void handleExitLeg(r, i);
+                                          }}
+                                          disabled={isExited}
+                                        >{isExited ? 'Exited' : 'Exit'}</button>
+                                        <button
+                                          type="button"
+                                          className="ghost"
+                                          style={{height: 22, lineHeight: '22px', padding: '0 8px', cursor:'pointer'}}
+                                          onClick={(e) => { e.stopPropagation(); handleDeleteLeg(r, i); }}
+                                        >Del</button>
+                                      </>
                                     )}
                                   </div>
                                 </div>
-                                <div className="grid" style={{gridTemplateColumns:'2fr repeat(5, minmax(0,1fr))', gridTemplateRows:'repeat(4, auto)', gap: 6}}>
+                                {snap.settled && (
+                                  <div className="muted" style={{ fontSize: 'calc(1em - 3px)', marginTop: 6, marginBottom: 8 }}>
+                                    {snap.exitPrice != null
+                                      ? (
+                                        <>
+                                          Exited @ {snap.exitPrice.toFixed(4)}
+                                          {snap.exitedAt ? ` · ${new Date(snap.exitedAt).toLocaleString()}` : ''}
+                                        </>
+                                      )
+                                      : (
+                                        <>
+                                          Settlement S = {snap.settleS != null ? snap.settleS.toFixed(2) : '—'}
+                                          {snap.settledAt ? ` · ${new Date(snap.settledAt).toLocaleString()}` : ''}
+                                        </>
+                                      )}
+                                  </div>
+                                )}
+                                <div className="grid" style={{gridTemplateColumns:'2fr repeat(5, minmax(0,1fr))', gridTemplateRows:'repeat(4, auto)', gap: 6, marginTop: 6}}>
                                   {/* First column header (row 1) */}
                                   <div style={{gridColumn:1, gridRow:1}} className="muted">Symbol</div>
                                   {/* First column value spans rows 2-4 and is vertically centered */}
                                   <div style={{gridColumn:1, gridRow:'2 / span 3', paddingRight:12, display:'flex', alignItems:'center'}}>
-                                    <div title={L.leg.symbol} style={{whiteSpace:'normal', overflowWrap:'anywhere', wordBreak:'break-word', fontSize:'1em'}}>{L.leg.symbol}</div>
-                                  </div>
-                                  {snap.settled && (
-                                    <div style={{gridColumn:'2 / span 5', gridRow:1, textAlign:'right', color:'#9c9c9c', fontSize:'calc(1em - 3px)'}}>
-                                      Settlement S = {snap.settleS != null ? snap.settleS.toFixed(2) : '—'}{snap.settledAt ? ` · ${new Date(snap.settledAt).toLocaleString()}` : ''}
+                                    <div title={L.leg.symbol} style={{whiteSpace:'normal', overflowWrap:'anywhere', wordBreak:'break-word', fontSize:'1em', display:'flex', flexDirection:'column', gap:2}}>
+                                      <span>{L.leg.symbol}</span>
+                                      {(() => {
+                                        const label = formatCreatedAtLabel(L.createdAt ?? r.createdAt);
+                                        return label ? (
+                                          <span className="muted" style={{ fontSize: 'calc(1em - 3px)' }}>{label}</span>
+                                        ) : null;
+                                      })()}
                                     </div>
-                                  )}
+                                  </div>
                                   {/* Row 1: titles (left to right) */}
                                   <div style={{gridColumn:2, gridRow:1}} className="muted">Bid / Ask</div>
                                   <div style={{gridColumn:3, gridRow:1}} className="muted">Mid</div>
@@ -2100,13 +2309,23 @@ export function UnifiedPositionsTable() {
             const snapshot = buildCloseSnapshot(target);
             applyCloseSnapshot(target, snapshot);
           }}
-          hiddenSymbols={view.legs.filter(L=>L.hidden).map(L=>L.leg.symbol)}
+          hiddenLegIds={view.legs.map((L, idx) => L.hidden ? legKey(L, idx) : null).filter(Boolean) as string[]}
           onEdit={() => {
             const current = view;
             if (!current) return;
             setView(null);
             openEditRow(current);
           }}
+          onExitLeg={view.id.startsWith('P:') ? (legIndex) => {
+            handleExitLeg(view, legIndex).then((exited) => {
+              if (!exited) return;
+              const targetId = view.id;
+              setView((current) => {
+                if (!current || current.id !== targetId) return current;
+                return { ...current };
+              });
+            });
+          } : undefined}
           onDeleteLeg={view.id.startsWith('P:') ? (legIndex) => {
             const removed = handleDeleteLeg(view, legIndex);
             if (!removed) return;
@@ -2118,18 +2337,18 @@ export function UnifiedPositionsTable() {
               return { ...current, legs: nextLegs };
             });
           } : undefined}
-          onToggleLegHidden={(sym) => {
+          onToggleLegHidden={(legId, legIndex) => {
             if (view.id.startsWith('P:')) {
               const pid = view.id.slice(2);
               // Update store
               updatePosition(pid, (p) => ({
                 ...p,
-                legs: p.legs.map(L => L.leg.symbol === sym ? { ...L, hidden: !L.hidden } : L)
+                legs: p.legs.map((L, idx) => legKey(L, idx) === legId ? { ...L, hidden: !L.hidden } : L)
               }));
               // Update local view so modal reflects change without closing
               setView((cur) => cur ? ({
                 ...cur,
-                legs: cur.legs.map(L => L.leg.symbol === sym ? { ...L, hidden: !L.hidden } : L)
+                legs: cur.legs.map((L, idx) => legKey(L, idx) === legId ? { ...L, hidden: !L.hidden } : L)
               }) : cur);
             } else if (view.id.startsWith('S:')) {
               try {
@@ -2140,7 +2359,7 @@ export function UnifiedPositionsTable() {
                 if (latest) {
                   updatePosition(latest, (p) => ({
                     ...p,
-                    legs: p.legs.map(L => L.leg.symbol === sym ? { ...L, hidden: true } : L)
+                    legs: p.legs.map((L, idx) => legKey(L, idx) === legId ? { ...L, hidden: true } : L)
                   }));
                   // Load the new position from store into the open modal
                   const pos = useStore.getState().positions.find(p => p.id === latest);
@@ -2449,7 +2668,11 @@ function SettleExpiredModal({ row, positionLabel, legsSnapshot, expiredExpiries,
                     </div>
                     <div className="muted" style={{ fontSize: 'calc(1em - 2px)' }}>
                       {legs.map((leg, idx) => {
-                        const settledLabel = leg.settled && leg.settleS != null ? ` · S=${leg.settleS.toFixed(2)}` : '';
+                        const settledLabel = (() => {
+                          if (leg.exitPrice != null && isFinite(Number(leg.exitPrice))) return ` · exit@${Number(leg.exitPrice).toFixed(4)}`;
+                          if (leg.settled && leg.settleS != null) return ` · S=${leg.settleS.toFixed(2)}`;
+                          return '';
+                        })();
                         return (
                           <span key={leg.leg.symbol + idx} style={{ marginRight: 12 }}>
                             {leg.side} {leg.leg.optionType}{leg.leg.strike} × {leg.qty}{settledLabel}

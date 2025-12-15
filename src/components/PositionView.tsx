@@ -1,11 +1,12 @@
 import React from 'react';
 import type { PositionLeg, CloseSnapshot, SpreadPosition, Position } from '../utils/types';
-import { subscribeLinearTicker, subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
+import { subscribeLinearTicker, subscribeOptionTicker } from '../services/ws';
 import { midPrice, bestBidAsk, fetchHV30 } from '../services/bybit';
 import { bsPrice, bsImpliedVol } from '../utils/bs';
 import { inferUnderlyingSpotSymbol } from '../utils/underlying';
 import { useStore } from '../store/store';
 import { SpotPriceChart } from './SpotPriceChart';
+import { legKey } from '../utils/legKey';
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 type ChartMode = 'pnl' | 'spot';
@@ -29,10 +30,11 @@ type Props = {
   title?: string;
   onClose: () => void;
   onClosePosition?: () => void;
-  onToggleLegHidden?: (symbol: string) => void;
-  hiddenSymbols?: string[];
+  onToggleLegHidden?: (legId: string, legIndex: number) => void;
+  hiddenLegIds?: string[];
   onEdit?: () => void;
   onDeleteLeg?: (legIndex: number) => void;
+  onExitLeg?: (legIndex: number) => void;
   variant?: 'modal' | 'summary';
 };
 
@@ -47,9 +49,10 @@ export function PositionView({
   onClose,
   onClosePosition,
   onToggleLegHidden,
-  hiddenSymbols,
+  hiddenLegIds,
   onEdit,
   onDeleteLeg,
+  onExitLeg,
   variant = 'modal',
 }: Props) {
   const isSummary = variant === 'summary';
@@ -99,10 +102,16 @@ export function PositionView({
       .filter((v) => Number.isFinite(v));
     return legTimes.length ? Math.min(...legTimes) : fallback;
   }, [createdAt, legs]);
+  const resolvedHiddenLegIds = React.useMemo(() => {
+    if (hiddenLegIds) return hiddenLegIds;
+    return legs
+      .map((L, idx) => (L.hidden ? legKey(L, idx) : null))
+      .filter(Boolean) as string[];
+  }, [hiddenLegIds, legs]);
   const legsCalc = React.useMemo(() => {
-    const hiddenSet = new Set(hiddenSymbols || []);
-    return legs.filter(L => !hiddenSet.has(L.leg.symbol));
-  }, [legs, hiddenSymbols]);
+    const hiddenSet = new Set(resolvedHiddenLegIds || []);
+    return legs.filter((L, idx) => !hiddenSet.has(legKey(L, idx)));
+  }, [legs, resolvedHiddenLegIds]);
   // Lock initial X-domain to ±50% around current spot (if available) to prevent re-centering
   const baseDomainRef = React.useRef<{ minX: number; maxX: number } | null>(null);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
@@ -248,7 +257,7 @@ export function PositionView({
     const symbols = Array.from(new Set(legs.map(l => l.leg.symbol)));
     const unsubs = symbols.slice(0, 300).map(sym => {
       const isOption = sym.includes('-');
-      const sub = isOption ? subscribeOptionTicker : subscribeSpotTicker;
+      const sub = isOption ? subscribeOptionTicker : subscribeLinearTicker;
       return sub(sym, (t) => setTickers(prev => ({ ...prev, [t.symbol]: { ...(prev[t.symbol] || {}), ...t } })));
     });
     return () => { unsubs.forEach(u => u()); };
@@ -377,42 +386,48 @@ export function PositionView({
       const { bid, ask } = bestBidAsk(t);
       const bidNum = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
       const askNum = ask != null && isFinite(Number(ask)) ? Number(ask) : undefined;
-      const mid = (() => {
-        const raw = midPrice(t);
-        return raw != null && isFinite(Number(raw)) ? Number(raw) : 0;
-      })();
-      const iv = t?.markIv != null ? Number(t.markIv) : undefined;
-      const dRaw = t?.delta != null ? Number(t.delta) : undefined;
-      const vRaw = t?.vega != null ? Number(t.vega) : undefined;
-      const thRaw = t?.theta != null ? Number(t.theta) : undefined;
-      const oi = t?.openInterest != null ? Number(t.openInterest) : undefined;
-      const qty = Number(L.qty) || 1;
-      const entryPrice = Number(L.entryPrice) || 0;
-      const isShort = L.side === 'short';
-      const execPrice = isShort ? (askNum ?? mid) : (bidNum ?? mid);
-      const sgn = L.side === 'long' ? 1 : -1;
-      const pnlMid = (isShort ? (entryPrice - mid) : (mid - entryPrice)) * qty;
-      const pnlExec = (isShort ? (entryPrice - execPrice) : (execPrice - entryPrice)) * qty;
       const symbol = String(L.leg.symbol || '');
       const expiryMs = Number(L.leg.expiryMs) || 0;
       const isPerp = !symbol.includes('-') || expiryMs <= 0;
+      const exitPriceRaw = Number((L as any)?.exitPrice);
+      const exitPrice = Number.isFinite(exitPriceRaw) ? exitPriceRaw : undefined;
+      const isExited = exitPrice != null;
+      const mid = (() => {
+        if (isExited) return exitPrice;
+        const raw = midPrice(t);
+        return raw != null && isFinite(Number(raw)) ? Number(raw) : undefined;
+      })();
+      const iv = isExited ? undefined : (t?.markIv != null ? Number(t.markIv) : undefined);
+      const dRaw = isExited ? 0 : (t?.delta != null ? Number(t.delta) : (isPerp ? 1 : undefined));
+      const vRaw = isExited ? 0 : (t?.vega != null ? Number(t.vega) : undefined);
+      const thRaw = isExited ? 0 : (t?.theta != null ? Number(t.theta) : undefined);
+      const oi = isExited ? undefined : (t?.openInterest != null ? Number(t.openInterest) : undefined);
+      const qty = Number(L.qty) || 1;
+      const entryPrice = Number(L.entryPrice) || 0;
+      const isShort = L.side === 'short';
+      const midSafe = mid ?? entryPrice;
+      const execPrice = isExited ? exitPrice : (isShort ? (askNum ?? midSafe) : (bidNum ?? midSafe));
+      const execSafe = execPrice ?? midSafe;
+      const sgn = L.side === 'long' ? 1 : -1;
+      const pnlMid = (isShort ? (entryPrice - midSafe) : (midSafe - entryPrice)) * qty;
+      const pnlExec = (isShort ? (entryPrice - execSafe) : (execSafe - entryPrice)) * qty;
       const strike = Number(L.leg.strike);
       if (Number.isFinite(strike) && strike > 0) strikeCandidates.push(strike);
       if (t?.indexPrice != null) addCandidate(t.indexPrice);
       if (isPerp) {
         addCandidate(t?.markPrice);
         addCandidate(t?.lastPrice);
-        addCandidate(mid);
+        addCandidate(midSafe);
         addCandidate(bidNum);
         addCandidate(askNum);
         if (Number.isFinite(entryPrice) && entryPrice > 0) perpEntryCandidates.push(entryPrice);
       }
       return {
         L,
-        bid: bidNum,
-        ask: askNum,
-        mid,
-        execPrice,
+        bid: isExited ? undefined : bidNum,
+        ask: isExited ? undefined : askNum,
+        mid: midSafe,
+        execPrice: execSafe,
         pnlMid,
         pnlExec,
         iv,
@@ -469,6 +484,8 @@ export function PositionView({
   const netPnlValue = useExecPnl ? calc.pnlExec : calc.pnl;
 
   const optionPriceAt = React.useCallback((leg: PositionLeg, S: number, nowMs: number): number => {
+    const exitPxRaw = Number((leg as any)?.exitPrice);
+    if (Number.isFinite(exitPxRaw)) return exitPxRaw;
     const isPerp = !String(leg.leg.symbol).includes('-');
     if (isPerp) return S;
     const t = tickers[leg.leg.symbol] || {};
@@ -800,10 +817,31 @@ export function PositionView({
 
   const canClosePosition = typeof onClosePosition === 'function' && !alreadyExited;
 
+  const formatPerpExitLines = React.useCallback((): string[] => {
+    const lines: string[] = [];
+    legs.forEach((L) => {
+      const sym = String(L.leg.symbol || '');
+      if (!sym || sym.includes('-')) return;
+      const t = tickers[sym] || {};
+      const { bid, ask } = bestBidAsk(t);
+      const price = L.side === 'long' ? bid : ask;
+      const display = (price != null && isFinite(Number(price))) ? Number(price).toFixed(2) : 'n/a';
+      const label = L.side === 'long' ? 'bid' : 'ask';
+      const qty = Number(L.qty) || 1;
+      const qtyLabel = Number.isFinite(qty) ? `×${qty}` : '';
+      lines.push(`${L.side === 'short' ? 'Short' : 'Long'} ${sym} ${qtyLabel} @ ${label} ${display}`);
+    });
+    return lines;
+  }, [legs, tickers]);
+
   const handleClosePosition = React.useCallback(() => {
     if (!canClosePosition || !onClosePosition) return;
-    if (window.confirm('Exit this item?')) onClosePosition();
-  }, [canClosePosition, onClosePosition]);
+    const perpLines = formatPerpExitLines();
+    const message = perpLines.length
+      ? `Exit this item?\n${perpLines.join('\n')}`
+      : 'Exit this item?';
+    if (window.confirm(message)) onClosePosition();
+  }, [canClosePosition, onClosePosition, formatPerpExitLines]);
 
   const containerStyle: React.CSSProperties = isSummary
     ? {
@@ -1238,48 +1276,90 @@ export function PositionView({
                 {legs.map((L, legIndex) => {
               const t = tickers[L.leg.symbol] || {};
               const { bid, ask } = bestBidAsk(t);
-              const bidNum = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
-              const askNum = ask != null && isFinite(Number(ask)) ? Number(ask) : undefined;
+              const bidNumRaw = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
+              const askNumRaw = ask != null && isFinite(Number(ask)) ? Number(ask) : undefined;
+              const symbol = String(L.leg.symbol || '');
+              const expiryMs = Number(L.leg.expiryMs) || 0;
+              const isPerp = !symbol.includes('-') || expiryMs <= 0;
               const midRaw = midPrice(t);
-              const mid = midRaw != null && isFinite(Number(midRaw)) ? Number(midRaw) : undefined;
-              const iv = t?.markIv != null ? Number(t.markIv) : undefined;
-              const dRaw = t?.delta != null ? Number(t.delta) : undefined;
-              const vRaw = t?.vega != null ? Number(t.vega) : undefined;
-              const thRaw = t?.theta != null ? Number(t.theta) : undefined;
+              const exitPxRaw = Number((L as any)?.exitPrice);
+              const exitPrice = Number.isFinite(exitPxRaw) ? exitPxRaw : undefined;
+              const exitedAtRaw = Number((L as any)?.exitedAt);
+              const exitedAt = Number.isFinite(exitedAtRaw) ? exitedAtRaw : undefined;
+              const isExited = exitPrice != null;
+              const midMarket = midRaw != null && isFinite(Number(midRaw)) ? Number(midRaw) : undefined;
+              const mid = isExited ? exitPrice : midMarket;
+              const iv = isExited ? undefined : (t?.markIv != null ? Number(t.markIv) : undefined);
+              const dRaw = isExited ? 0 : (t?.delta != null ? Number(t.delta) : (isPerp ? 1 : undefined));
+              const vRaw = isExited ? 0 : (t?.vega != null ? Number(t.vega) : undefined);
+              const thRaw = isExited ? 0 : (t?.theta != null ? Number(t.theta) : undefined);
               const qty = Number(L.qty) || 1;
               const entry = Number(L.entryPrice);
               const isShort = L.side === 'short';
-              const execPrice = isShort ? (askNum ?? mid) : (bidNum ?? mid);
-              const pnlMid = (isFinite(entry) && mid != null && isFinite(mid)) ? (isShort ? (entry - mid) : (mid - entry)) * qty : undefined;
-              const pnlExec = (isFinite(entry) && execPrice != null && isFinite(execPrice)) ? (isShort ? (entry - execPrice) : (execPrice - entry)) * qty : undefined;
+              const midSafe = (mid != null && isFinite(mid)) ? mid : (isFinite(entry) ? entry : 0);
+              const execPrice = isExited ? exitPrice : (isShort ? (askNumRaw ?? midSafe) : (bidNumRaw ?? midSafe));
+              const execSafe = (execPrice != null && isFinite(execPrice)) ? execPrice : midSafe;
+              const pnlMid = (isFinite(entry) ? (isShort ? (entry - midSafe) : (midSafe - entry)) * qty : undefined);
+              const pnlExec = (isFinite(entry) ? (isShort ? (entry - execSafe) : (execSafe - entry)) * qty : undefined);
               const sgn = L.side === 'long' ? 1 : -1;
+              const usdNotional = isPerp && isFinite(qty) ? qty * (midSafe ?? entry ?? 0) : undefined;
+              const bidNum = isExited ? undefined : bidNumRaw;
+              const askNum = isExited ? undefined : askNumRaw;
               const x = {
                 L,
                 bid: bidNum,
                 ask: askNum,
-                mid,
+                mid: midSafe,
                 pnlMid,
                 pnlExec,
                 iv,
                 d: dRaw != null ? sgn * dRaw : undefined,
                 v: vRaw != null ? sgn * vRaw : undefined,
                 th: thRaw != null ? sgn * thRaw : undefined,
-                oi: t?.openInterest != null ? Number(t.openInterest) : undefined,
+                oi: isExited ? undefined : (t?.openInterest != null ? Number(t.openInterest) : undefined),
+                exitPrice,
+                exitedAt,
+                isExited,
               };
-              const isHidden = (hiddenSymbols || []).includes(L.leg.symbol);
+              const legId = legKey(L, legIndex);
+              const isHidden = (resolvedHiddenLegIds || []).includes(legId);
+              const exitTooltip = isExited && exitPrice != null
+                ? `Exited at ${exitPrice.toFixed(4)}${exitedAt ? ` · ${new Date(exitedAt).toLocaleString()}` : ''}`
+                : 'Exit only this leg (sell/buy back)';
               return (
-              <div key={L.leg.symbol} style={{border: '1px solid var(--border)', borderRadius: 8, padding: 6, fontSize: 'calc(1em - 3px)', ...(isHidden ? { background: 'rgba(128,128,128,.12)' } : {})}}>
+              <div key={legId} style={{border: '1px solid var(--border)', borderRadius: 8, padding: 6, fontSize: 'calc(1em - 3px)', ...(isHidden ? { background: 'rgba(128,128,128,.12)' } : {})}}>
                 <div style={{display:'flex', justifyContent:'space-between', marginBottom: 2}}>
                   <div style={{display:'flex', alignItems:'center', gap:8}}>
                     {onToggleLegHidden && (
-                      <button type="button" className="ghost" style={{height: 22, lineHeight: '22px', padding: '0 8px', cursor:'pointer', position:'relative', zIndex:2}} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleLegHidden?.(L.leg.symbol); }}>
+                      <button type="button" className="ghost" style={{height: 22, lineHeight: '22px', padding: '0 8px', cursor:'pointer', position:'relative', zIndex:2}} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleLegHidden?.(legId, legIndex); }}>
                           {isHidden ? 'Unhide' : 'Hide'}
                       </button>
                     )}
-                    <div style={{fontSize:'calc(1em + 2px)'}}><strong>{L.side}</strong> {L.leg.optionType} {L.leg.strike} × {L.qty}</div>
+                    <div style={{fontSize:'calc(1em + 2px)'}}><strong>{L.side}</strong> {L.leg.optionType} {L.leg.strike} × {L.qty}{isPerp && usdNotional != null && isFinite(usdNotional) ? ` ($${usdNotional.toFixed(0)})` : ''}</div>
                   </div>
                   <div style={{display:'flex', alignItems:'center', gap:8}}>
                     <div className="muted" style={{fontSize:'calc(1em + 2px)'}}>{Number(L.leg.expiryMs) > 0 ? new Date(Number(L.leg.expiryMs)).toISOString().slice(0,10) : ''}</div>
+                    {onExitLeg && (
+                      <button
+                        type="button"
+                        className="ghost"
+                        title={exitTooltip}
+                        style={{
+                          height: 22,
+                          lineHeight: '22px',
+                          padding: '0 8px',
+                          cursor: isExited ? 'not-allowed' : 'pointer',
+                          color: isExited ? '#9ba0a6' : undefined,
+                        }}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (isExited) return;
+                          onExitLeg(legIndex);
+                        }}
+                        disabled={isExited}
+                      >{isExited ? 'Exited' : 'Exit'}</button>
+                    )}
                     {onDeleteLeg && (
                       <button
                         type="button"
@@ -1290,12 +1370,17 @@ export function PositionView({
                           e.stopPropagation();
                           onDeleteLeg(legIndex);
                         }}
-                      >Del</button>
+                  >Del</button>
                     )}
                   </div>
                 </div>
+                {isExited && (
+                  <div className="muted" style={{ fontSize: 'calc(1em - 3px)', marginTop: 6, marginBottom: 8 }}>
+                    Exited @ {exitPrice?.toFixed(4)}{exitedAt ? ` · ${new Date(exitedAt).toLocaleString()}` : ''}
+                  </div>
+                )}
                 {/* Grid 6x4; first column: row 1 label, rows 2-4 merged value centered */}
-                <div className="grid" style={{gridTemplateColumns:'2fr repeat(5, minmax(0,1fr))', gridTemplateRows:'repeat(4, auto)', gap: 6}}>
+                <div className="grid" style={{gridTemplateColumns:'2fr repeat(5, minmax(0,1fr))', gridTemplateRows:'repeat(4, auto)', gap: 6, marginTop: 6}}>
                   {/* First column header (row 1) */}
                   <div style={{gridColumn:1, gridRow:1}} className="muted">Symbol</div>
                   {/* First column value spans rows 2-4 and is vertically centered */}

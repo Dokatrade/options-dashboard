@@ -48,7 +48,10 @@ export function PositionsTable() {
               const legs = p.legs.filter(l => !l.hidden).map((l) => {
                 const t = tickers[l.leg.symbol];
                 const m = midPrice(t) ?? 0;
-                const delta = t?.delta != null ? Number(t.delta) : 0;
+                const symbol = String(l.leg.symbol || '');
+                const expiryMs = Number(l.leg.expiryMs) || 0;
+                const isPerp = !symbol.includes('-') || expiryMs <= 0;
+                const delta = t?.delta != null ? Number(t.delta) : (isPerp ? 1 : 0);
                 return { ...l, mid: m, delta };
               });
               const netEntry = legs.reduce((a, l) => a + (l.side === 'short' ? 1 : -1) * l.entryPrice * l.qty, 0);

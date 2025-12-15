@@ -403,6 +403,14 @@ export const useStore = create<State>()(
                   const raw = Number((l as any)?.settledAt);
                   return Number.isFinite(raw) ? raw : undefined;
                 })(),
+                exitPrice: (() => {
+                  const raw = Number((l as any)?.exitPrice ?? (l as any)?.exitPx);
+                  return Number.isFinite(raw) ? raw : undefined;
+                })(),
+                exitedAt: (() => {
+                  const raw = Number((l as any)?.exitedAt ?? (l as any)?.exitAt ?? (l as any)?.closedAt);
+                  return Number.isFinite(raw) ? raw : undefined;
+                })(),
               };
             }).filter((l: any) => l.leg.symbol) : [];
             const legTimes = legs

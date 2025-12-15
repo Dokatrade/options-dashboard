@@ -89,7 +89,7 @@ export function HelpModal({ onClose }: Props) {
 
           <p><strong>Маркет‑данные</strong></p>
           <ul>
-            <li><strong>Spot</strong> ETH и 24h% — по WS спота.</li>
+            <li><strong>Perp ETHUSDT</strong> (bid/ask/mark/24h%) — по WS линейных перпов (Bybit Linear).</li>
             <li><strong>ATM IV</strong> — берётся у контракта ближайшего к деньгам на ближайшей экспирации (WS + стартовый REST).</li>
             <li><strong>HV 30d</strong> — с REST; при недоступности временно показываем ATM IV как прокси.</li>
           </ul>

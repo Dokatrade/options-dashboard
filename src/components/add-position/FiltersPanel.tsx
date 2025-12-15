@@ -1,7 +1,7 @@
 import React from 'react';
 import type { OptionType } from '../../utils/types';
 
-const formatSpot = (price?: number) => {
+const formatPerp = (price?: number) => {
   if (price == null || Number.isNaN(price)) return '—';
   return `$${price.toFixed(2)}`;
 };
@@ -21,7 +21,7 @@ type FiltersPanelProps = {
   showAllStrikes: boolean;
   loading: boolean;
   slowMode: boolean;
-  spotPrice?: number;
+  perpPrice?: number;
   onTypeChange: (type: OptionType) => void;
   onExpiryChange: (expiry: number | '') => void;
   onDeltaMinChange: (value: number) => void;
@@ -42,7 +42,7 @@ export function FiltersPanel({
   showAllStrikes,
   loading,
   slowMode,
-  spotPrice,
+  perpPrice,
   onTypeChange,
   onExpiryChange,
   onDeltaMinChange,
@@ -55,8 +55,8 @@ export function FiltersPanel({
     <div className="add-position__filters">
       <div className="add-position__filters-row add-position__filters-row--top">
         <div className="add-position__status">
-          <span className="muted">Spot ETH</span>
-          <span className="add-position__spot">{formatSpot(spotPrice)}</span>
+          <span className="muted">ETHUSDT Perp</span>
+          <span className="add-position__spot">{formatPerp(perpPrice)}</span>
           {slowMode && <span className="add-position__badge">Slow mode</span>}
         </div>
       </div>

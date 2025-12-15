@@ -1,6 +1,6 @@
 import React from 'react';
 import { useStore, DEFAULT_PORTFOLIO_ID } from '../store/store';
-import { midPrice, bestBidAsk, fetchOptionTickers, fetchSpotEth } from '../services/bybit';
+import { midPrice, bestBidAsk, fetchOptionTickers, fetchPerpEth } from '../services/bybit';
 import { describeStrategy, type StrategyLeg } from '../utils/strategyDetection';
 import { useSlowMode } from '../contexts/SlowModeContext';
 import { PositionView } from './PositionView';
@@ -183,6 +183,28 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
     return Number.isFinite(n) ? n : undefined;
   };
 
+  const legExitPnl = (leg: Position['legs'][number]): number | undefined => {
+    const exit = toFiniteNumber((leg as any)?.exitPrice);
+    if (exit == null) return undefined;
+    const entry = Number(leg.entryPrice) || 0;
+    const qty = Number(leg.qty) || 1;
+    const pnl = leg.side === 'short' ? (entry - exit) * qty : (exit - entry) * qty;
+    return Number.isFinite(pnl) ? pnl : undefined;
+  };
+
+  const formatLegLabel = (leg: Position['legs'][number]): string => {
+    const sym = String(leg.leg.symbol || '');
+    const isOption = sym.includes('-');
+    const expiry = Number(leg.leg.expiryMs) || 0;
+    const base = isOption
+      ? `${leg.side} ${leg.leg.optionType}${leg.leg.strike}`
+      : `${leg.side} ${sym}`;
+    if (isOption && expiry > 0) {
+      try { return `${base} · ${new Date(expiry).toISOString().slice(0,10)}`; } catch { return base; }
+    }
+    return base;
+  };
+
   const metrics = React.useMemo(() => {
     // Helpers
     const legMid = (symbol: string): number | undefined => {
@@ -192,10 +214,17 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
     };
     const isOptionSym = (sym: string) => String(sym || '').includes('-');
 
-    // Realized PnL (sum of closeSnapshot.pnlExec for closed items)
+    // Realized PnL (closed items + legs exited in open positions)
     const realizedFromSpreads = spreadsSel.reduce((acc, p) => acc + (toNumber(p?.closeSnapshot?.pnlExec) ?? 0), 0);
     const realizedFromPositions = positionsSel.reduce((acc, p) => acc + (toNumber(p?.closeSnapshot?.pnlExec) ?? 0), 0);
-    const realized = realizedFromSpreads + realizedFromPositions;
+    const realizedFromLegs = positionsSel
+      .filter((p) => !p.closeSnapshot)
+      .reduce((acc, p) => {
+        const legs = Array.isArray(p.legs) ? p.legs : [];
+        const sum = legs.reduce((s, L) => s + (legExitPnl(L) ?? 0), 0);
+        return acc + sum;
+      }, 0);
+    const realized = realizedFromSpreads + realizedFromPositions + realizedFromLegs;
 
     // Unrealized PnL (open only); совпадает с настройкой таблицы: exec vs mid
     let unrealized = 0;
@@ -219,7 +248,7 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
     });
     // Generic positions
     positionsSel.filter(p => !p.closedAt).forEach((p) => {
-      const legs = Array.isArray(p.legs) ? p.legs.filter(L => !L.hidden) : [];
+      const legs = Array.isArray(p.legs) ? p.legs.filter(L => !L.hidden && !(L.exitPrice != null && isFinite(Number(L.exitPrice)))) : [];
       if (!legs.length) return;
       // Требуем цену для всех ног (exec или mid), иначе пропускаем
       const rows: Array<{ now: number; entry: number; qty: number; sign: number; sym: string } | null> = legs.map((L) => {
@@ -259,7 +288,7 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
     // Примерная оценка MaxLoss для произвольной позиции по payoff на экспирации
     const approxMaxLossForPosition = (p: typeof positions[number]): number | undefined => {
       if (p.closedAt) return undefined;
-      const legs = Array.isArray(p.legs) ? p.legs.filter(L => !L.hidden) : [];
+      const legs = Array.isArray(p.legs) ? p.legs.filter(L => !L.hidden && !(L.exitPrice != null && isFinite(Number(L.exitPrice)))) : [];
       if (!legs.length) return undefined;
       const Ks = Array.from(new Set(legs.map(L => Number(L.leg.strike) || 0).filter(s => isFinite(s) && s > 0))).sort((a,b)=>a-b);
       const netEntry = legs.reduce((a, L) => a + (L.side === 'short' ? 1 : -1) * (Number(L.entryPrice) || 0) * (Number(L.qty) || 1), 0);
@@ -318,14 +347,14 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
     const collectSymbols = () => {
       const symbols = new Set<string>();
       spreadsSel.filter(p => !p.closedAt).forEach(p => { symbols.add(p.short.symbol); symbols.add(p.long.symbol); });
-      positionsSel.filter(p => !p.closedAt).forEach(p => p.legs.filter(L => !L.hidden).forEach(L => symbols.add(L.leg.symbol)));
+      positionsSel.filter(p => !p.closedAt).forEach(p => p.legs.filter(L => !L.hidden && !(L.exitPrice != null && isFinite(Number(L.exitPrice)))).forEach(L => symbols.add(L.leg.symbol)));
       return Array.from(symbols);
     };
     const refresh = async () => {
       try {
-        const [list, spot] = await Promise.all([
+        const [list, perp] = await Promise.all([
           fetchOptionTickers().catch(() => []),
-          fetchSpotEth().catch(() => undefined),
+          fetchPerpEth().catch(() => undefined),
         ]);
         if (stopped) return;
         const needed = new Set(collectSymbols());
@@ -348,10 +377,23 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
               openInterest: t?.openInterest != null ? Number(t.openInterest) : cur.openInterest,
             };
           });
-          if (spot?.price != null && isFinite(spot.price) && needed.has('ETHUSDT')) {
-            const price = Number(spot.price);
+          const mark = Number.isFinite(perp?.markPrice) ? Number(perp?.markPrice) : undefined;
+          const last = Number.isFinite(perp?.lastPrice) ? Number(perp?.lastPrice) : undefined;
+          const idx = Number.isFinite(perp?.indexPrice) ? Number(perp?.indexPrice) : undefined;
+          const bid = Number.isFinite(perp?.bid) ? Number(perp?.bid) : undefined;
+          const ask = Number.isFinite(perp?.ask) ? Number(perp?.ask) : undefined;
+          const price = Number.isFinite(perp?.price) ? Number(perp?.price) : undefined;
+          if (needed.has('ETHUSDT') && (mark != null || last != null || idx != null || bid != null || ask != null || price != null)) {
             const cur = next['ETHUSDT'] || {};
-            next['ETHUSDT'] = { ...cur, markPrice: price, bid1Price: cur.bid1Price ?? price, ask1Price: cur.ask1Price ?? price };
+            const anchor = mark ?? last ?? price ?? idx ?? cur.markPrice ?? cur.lastPrice;
+            next['ETHUSDT'] = {
+              ...cur,
+              markPrice: mark ?? anchor ?? cur.markPrice,
+              lastPrice: last ?? cur.lastPrice,
+              indexPrice: idx ?? anchor ?? cur.indexPrice,
+              bid1Price: bid ?? cur.bid1Price ?? anchor,
+              ask1Price: ask ?? cur.ask1Price ?? anchor,
+            };
           }
           return next;
         });
@@ -380,7 +422,7 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
   const pnlColor = metrics.realized > 0 ? 'var(--gain)' : (metrics.realized < 0 ? 'var(--loss)' : undefined);
   const upnlColor = metrics.unrealized > 0 ? 'var(--gain)' : (metrics.unrealized < 0 ? 'var(--loss)' : undefined);
 
-  type RealizedEntry = { id: string; type: 'spread' | 'position'; label: string; closedAt: number; pnl?: number; ref: SpreadPosition | Position };
+  type RealizedEntry = { id: string; type: 'spread' | 'position' | 'leg'; label: string; closedAt: number; pnl?: number; ref: SpreadPosition | Position };
 
   const realizedEntries = React.useMemo<RealizedEntry[]>(() => {
     const entries: RealizedEntry[] = [];
@@ -415,6 +457,17 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
         return Number.isFinite(raw) ? raw : undefined;
       })();
       entries.push({ id: p.id, type: 'position', label, closedAt: Number(p.closedAt) || 0, pnl, ref: p });
+    });
+    // Legs exited inside open positions
+    positionsSel.filter(p => !p.closeSnapshot).forEach((p) => {
+      const legs = Array.isArray(p.legs) ? p.legs : [];
+      legs.forEach((L, idx) => {
+        const pnl = legExitPnl(L);
+        if (pnl == null) return;
+        const exitAt = Number((L as any)?.exitedAt) || Number(p.closedAt) || Number(p.createdAt) || Date.now();
+        const label = `Leg · ${formatLegLabel(L)}`;
+        entries.push({ id: `${p.id}-leg-${idx}-${exitAt}`, type: 'leg', label, closedAt: exitAt, pnl, ref: p });
+      });
     });
     return entries.sort((a, b) => Number(b.closedAt || 0) - Number(a.closedAt || 0));
   }, [positionsSel, spreadsSel]);
@@ -729,7 +782,7 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
                               textAlign: 'left',
                             }}
                           >
-                            {entry.label || (entry.type === 'spread' ? 'Spread' : 'Position')}
+                            {entry.label || (entry.type === 'spread' ? 'Spread' : (entry.type === 'leg' ? 'Leg' : 'Position'))}
                           </button>
                           <div className="muted" style={{ fontSize: '0.9em' }}>{fmtDateTime(entry.closedAt)}</div>
                         </div>
@@ -760,7 +813,7 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
           closeSnapshot={viewClosed.closeSnapshot}
           note={viewClosed.note}
           title={viewClosed.title}
-          hiddenSymbols={viewClosed.hiddenSymbols}
+          hiddenLegIds={viewClosed.hiddenLegIds}
           onClosePosition={viewClosed.onClosePosition}
           onClose={() => setViewClosed(null)}
         />

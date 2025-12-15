@@ -128,15 +128,41 @@ export async function fetchOrderbookL1(symbol: string): Promise<{ bid?: number; 
   }
 }
 
-export async function fetchSpotEth(): Promise<{ price: number; change24h?: number }> {
+export type PerpTicker = {
+  price?: number;
+  change24h?: number;
+  bid?: number;
+  ask?: number;
+  markPrice?: number;
+  lastPrice?: number;
+  indexPrice?: number;
+};
+
+export async function fetchPerpEth(): Promise<PerpTicker> {
   type R = { retCode: number; result?: { list: any[] } };
-  const data = await getJson<R>(`${API}/v5/market/tickers?category=spot&symbol=ETHUSDT`);
+  const data = await getJson<R>(`${API}/v5/market/tickers?category=linear&symbol=ETHUSDT`);
   const t = data?.result?.list?.[0];
-  const last = Number(t?.lastPrice ?? t?.lastPrice ?? NaN);
-  const prev = Number(t?.prevPrice24h ?? NaN);
-  const change = isFinite(last) && isFinite(prev) ? ((last - prev) / prev) * 100 : undefined;
-  return { price: last, change24h: change };
+  const mark = Number(t?.markPrice ?? NaN);
+  const last = Number(t?.lastPrice ?? NaN);
+  const index = Number(t?.indexPrice ?? NaN);
+  const bid = Number(t?.bid1Price ?? t?.bestBidPrice ?? NaN);
+  const ask = Number(t?.ask1Price ?? t?.bestAskPrice ?? NaN);
+  const price24hPcnt = Number(t?.price24hPcnt ?? NaN);
+  const change = Number.isFinite(price24hPcnt) ? price24hPcnt * 100 : undefined;
+  const priceCandidates = [mark, last, index, bid, ask].filter((v) => Number.isFinite(v) && v > 0) as number[];
+  return {
+    price: priceCandidates[0],
+    change24h: change,
+    bid: Number.isFinite(bid) && bid > 0 ? bid : undefined,
+    ask: Number.isFinite(ask) && ask > 0 ? ask : undefined,
+    markPrice: Number.isFinite(mark) && mark > 0 ? mark : undefined,
+    lastPrice: Number.isFinite(last) && last > 0 ? last : undefined,
+    indexPrice: Number.isFinite(index) && index > 0 ? index : undefined,
+  };
 }
+
+// Legacy alias for callers expecting spot naming; now returns perp ticker
+export const fetchSpotEth = fetchPerpEth;
 
 type DeliveryCacheEntry = { price?: number; ts: number; ttl: number };
 const deliveryCache = new Map<string, DeliveryCacheEntry>();

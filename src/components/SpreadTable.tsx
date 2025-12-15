@@ -5,6 +5,7 @@ import { subscribeTicker } from '../services/ws';
 import { PositionView } from './PositionView';
 import type { CloseSnapshot } from '../utils/types';
 import { EditPositionModal } from './EditPositionModal';
+import { legKey } from '../utils/legKey';
 
 type RowCalc = {
   priceNow?: number;
@@ -201,7 +202,7 @@ export function SpreadTable() {
                     <tr>
                       <td colSpan={10}>
                         <div className="grid" style={{gap: 6}}>
-                          {[{ side: 'short' as const, leg: p.short }, { side: 'long' as const, leg: p.long }].map(({ side, leg }) => {
+                          {[{ side: 'short' as const, leg: p.short }, { side: 'long' as const, leg: p.long }].map(({ side, leg }, legIndex) => {
                             const t = tickers[leg.symbol];
                             const m = midPrice(t);
                             const iv = t?.markIv != null ? Number(t.markIv) : undefined;
@@ -229,7 +230,7 @@ export function SpreadTable() {
                                         remove(p.id);
                                         if (latest) updatePosition(latest, (pos) => ({
                                           ...pos,
-                                          legs: pos.legs.map(LL => LL.leg.symbol === leg.symbol ? { ...LL, hidden: true } : LL)
+                                          legs: pos.legs.map((LL, idx) => idx === legIndex ? { ...LL, hidden: true } : LL)
                                         }));
                                       } catch {}
                                     }}>Hide</button>
@@ -303,14 +304,14 @@ export function SpreadTable() {
                 if (latest) setEditId(latest);
               } catch {}
             }}
-            onToggleLegHidden={(sym) => {
+            onToggleLegHidden={(legId) => {
               try {
                 addPosition({ legs, note: pos.note });
                 const latest = useStore.getState().positions?.[0]?.id;
                 remove(pos.id);
                 if (latest) updatePosition(latest, (p) => ({
                   ...p,
-                  legs: p.legs.map(L => L.leg.symbol === sym ? { ...L, hidden: true } : L)
+                  legs: p.legs.map((L, idx) => legKey(L, idx) === legId ? { ...L, hidden: true } : L)
                 }));
               } catch {}
               setViewId(null);

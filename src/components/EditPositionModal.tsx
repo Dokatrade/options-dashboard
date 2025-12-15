@@ -1,8 +1,8 @@
 import React from 'react';
 import { useStore, DEFAULT_PORTFOLIO_ID } from '../store/store';
-import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk } from '../services/bybit';
+import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk, fetchPerpEth } from '../services/bybit';
 import { ensureUsdtSymbol } from '../utils/symbols';
-import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
+import { subscribeLinearTicker, subscribeOptionTicker } from '../services/ws';
 import type { Position, InstrumentInfo, Leg, OptionType } from '../utils/types';
 
 type Props = { id: string; onClose: () => void };
@@ -146,6 +146,31 @@ export function EditPositionModal({ id, onClose }: Props) {
     let m = true;
     fetchInstruments().then((list) => { if (!m) return; setInstruments(list.filter(i => i.deliveryTime > 0 && Number.isFinite(i.strike))); });
     fetchOptionTickers().then((list) => { if (!m) return; setTickers(Object.fromEntries(list.map(t => [t.symbol, t]))); });
+    fetchPerpEth().then((perp) => {
+      if (!m || !perp) return;
+      const mark = Number.isFinite(perp.markPrice) ? Number(perp.markPrice) : undefined;
+      const last = Number.isFinite(perp.lastPrice) ? Number(perp.lastPrice) : undefined;
+      const idx = Number.isFinite(perp.indexPrice) ? Number(perp.indexPrice) : undefined;
+      const bid = Number.isFinite(perp.bid) ? Number(perp.bid) : undefined;
+      const ask = Number.isFinite(perp.ask) ? Number(perp.ask) : undefined;
+      const price = Number.isFinite(perp.price) ? Number(perp.price) : undefined;
+      if (mark == null && last == null && idx == null && bid == null && ask == null && price == null) return;
+      setTickers((prev) => {
+        const cur = prev['ETHUSDT'] || {};
+        const anchor = mark ?? last ?? price ?? idx ?? cur.markPrice ?? cur.lastPrice;
+        return {
+          ...prev,
+          ETHUSDT: {
+            ...cur,
+            markPrice: mark ?? anchor ?? cur.markPrice,
+            lastPrice: last ?? cur.lastPrice,
+            indexPrice: idx ?? anchor ?? cur.indexPrice,
+            bid1Price: bid ?? cur.bid1Price ?? anchor,
+            ask1Price: ask ?? cur.ask1Price ?? anchor,
+          },
+        };
+      });
+    }).catch(() => {});
     return () => { m = false; };
   }, []);
 
@@ -210,7 +235,7 @@ export function EditPositionModal({ id, onClose }: Props) {
     symbols.add('ETHUSDT');
     const unsubs = Array.from(symbols).slice(0,300).map(sym => {
       const isOption = sym.includes('-');
-      const sub = isOption ? subscribeOptionTicker : subscribeSpotTicker;
+      const sub = isOption ? subscribeOptionTicker : subscribeLinearTicker;
       return sub(sym, (t) => setTickers(prev => {
         const cur = prev[t.symbol] || {};
         const merged: any = { ...cur };

@@ -28,7 +28,7 @@ type Props = {
 };
 
 const posParams: Array<{ value: string; label: string }> = [
-  { value: 'spot', label: 'Spot' },
+  { value: 'spot', label: 'Perp (ETHUSDT)' },
   { value: 'netEntry', label: 'Net entry' },
   { value: 'netMid', label: 'Net mid' },
   { value: 'kmid', label: 'Kmid (Net mid / Net entry)' },
@@ -41,7 +41,7 @@ const posParams: Array<{ value: string; label: string }> = [
 ];
 
 const legParams: Array<{ value: string; label: string }> = [
-  { value: 'spot', label: 'Spot' },
+  { value: 'spot', label: 'Perp (underlying)' },
   { value: 'bid', label: 'Bid' },
   { value: 'ask', label: 'Ask' },
   { value: 'mid', label: 'Mid' },
@@ -66,7 +66,7 @@ type TextPart = { text: string; highlight?: boolean };
 type ValueDescriptor = { parts: TextPart[]; unit?: ValueUnit; source: 'number' | 'metric' | 'expression'; rawNumber?: number };
 
 const positionMetricMeta: Record<string, { phrase: string; unit?: ValueUnit }> = {
-  spot: { phrase: 'spot price', unit: 'currency' },
+  spot: { phrase: 'perp price (ETHUSDT)', unit: 'currency' },
   netEntry: { phrase: 'net entry price', unit: 'currency' },
   netMid: { phrase: 'net mid price', unit: 'currency' },
   kmid: { phrase: 'Kmid ratio' },
@@ -79,7 +79,7 @@ const positionMetricMeta: Record<string, { phrase: string; unit?: ValueUnit }> =
 };
 
 const legMetricMeta: Record<string, { phrase: string; unit?: ValueUnit }> = {
-  spot: { phrase: 'underlying spot price', unit: 'currency' },
+  spot: { phrase: 'underlying perp price', unit: 'currency' },
   bid: { phrase: 'bid price', unit: 'currency' },
   ask: { phrase: 'ask price', unit: 'currency' },
   mid: { phrase: 'mid price', unit: 'currency' },

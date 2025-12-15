@@ -32,7 +32,7 @@
 - WebSocket (Bybit Public WS v5):
   - Опционы: `wss://stream.bybit.com/v5/public/option`.
   - Спот: `wss://stream.bybit.com/v5/public/spot`.
-  - Линейные контракты: `wss://stream.bybit.com/v5/public/linear` (используется, чтобы читать `indexPrice` для `ETHUSDT` и задавать единый “Index Spot” во всех окнах View).
+  - Линейные контракты: `wss://stream.bybit.com/v5/public/linear` (используется, чтобы читать `indexPrice` для `ETHUSDT` и задавать единый “Index” (perp anchor) во всех окнах View).
   - Формат подписки на открытие: отправляется JSON `{"op":"subscribe","args":["tickers.<SYMBOL>","orderbook.1.<SYMBOL>"]}` на соответствующее подключение. Один WS-сокет ведет собственный список символов; при реконнекте выполняется пере‑подписка.
   - Пинг: каждые ~15 секунд отправляется `{"op":"ping"}`.
   - Сообщения:
@@ -71,10 +71,10 @@
 - UnifiedPositionsTable (`src/components/UnifiedPositionsTable.tsx`)
   - Склеивает `spreads` и `positions` в единую таблицу. Метрики на строку: `netEntry`, `netMid`, `PnL`, `delta/gamma/vega/theta`, показатели ликвидности (макс. спред, мин. OI, макс. спред %), DTE, ширина вертикали, maxLoss и пр.
   - Режимы обновления:
-    - Realtime (по умолчанию, когда SlowMode выключен): подписка через WS на `tickers.<SYMBOL>` и `orderbook.1.<SYMBOL>` для всех ног; ETHUSDT также подписывается по споту для IF‑правил. Дозировано ограничивается числом символов (`slice(...)`) во избежание перегрузки.
-    - SlowMode (`src/contexts/SlowModeContext.tsx`): периодические REST‑обновления (`fetchOptionTickers`, `fetchSpotEth`, дополнительно `fetchOrderbookL1` чанками). Также есть быстрый `captureRealtimeSnapshot` (короткая подписка WS на 500 мс для освежения полей и тут же отписка).
-  - Определение спота для строки (для IF и некоторых вычислений):
-    - Приоритет: ETHUSDT (спот) из WS (last/mark) → любой `indexPrice` ноги → `settlements` (если закрыто/экспирировано).
+    - Realtime (по умолчанию, когда SlowMode выключен): подписка через WS на `tickers.<SYMBOL>` и `orderbook.1.<SYMBOL>` для всех ног; ETHUSDT также подписывается по линейным перпам для IF‑правил. Дозировано ограничивается числом символов (`slice(...)`) во избежание перегрузки.
+    - SlowMode (`src/contexts/SlowModeContext.tsx`): периодические REST‑обновления (`fetchOptionTickers`, `fetchPerpEth`, дополнительно `fetchOrderbookL1` чанками). Также есть быстрый `captureRealtimeSnapshot` (короткая подписка WS на 500 мс для освежения полей и тут же отписка).
+  - Определение базовой цены (perp/index) для строки (для IF и некоторых вычислений):
+    - Приоритет: ETHUSDT (перп) из WS (mark/last) → любой `indexPrice` ноги → `settlements` (если закрыто/экспирировано).
   - Авто‑settlement: периодический опрос `delivery-price`/`delivery-history`, отметка settled по экспирациям; автозакрытие позиции, когда все опционные ноги просрочены.
   - Экспорт CSV; IF‑правила: простая DSL с параметрами на уровне позиции/ноги и композицией условий (AND/OR).
 
@@ -86,9 +86,9 @@
 
 - PositionView (`src/components/PositionView.tsx`)
   - Подписки:
-    - На все ноги позиции: опцион/спот WS для котировок и L1.
+    - На все ноги позиции: опцион/перп WS для котировок и L1.
     - На линейный тикер базового актива: через `subscribeLinearTicker` на `wss://stream.bybit.com/v5/public/linear` по символу, полученному из `inferUnderlyingSpotSymbol(...)` (обычно `ETHUSDT`). Хранится карта `linearIndex[symbol]`.
-  - Якорь Index Spot (единый для всех окон View):
+  - Якорь Index (единый для всех окон View):
     - Приоритет №1: `data.indexPrice` из линейного WS‑тикера `tickers.<ETH>USDT`.
     - Фоллбэк: `indexPrice` из любой ноги (для опционов это `underlyingPrice`, подмешиваемый в тикер).
     - Крайние фоллбэки: для перп‑ног — `markPrice`/`lastPrice`/mid/bid/ask; затем среднее по входным ценам перп‑ног; затем среднее по страйкам.
@@ -98,7 +98,7 @@
     - PnL: на mid и “exec” отдельно. Аггрегирование греков по знаку (long/short) с весом qty.
     - DTE‑лейбл: для множества экспираций показывается диапазон `min–max` дней.
   - Модель цены:
-    - Для опционов — Black–Scholes c параметрами: `S` (спот), `K`, `T`, `sigma` из mark IV (или HV30 как фоллбэк, нормализованный), `r` (регулируется UI как `rPct`). Ползунок времени двигает долю оставшегося T.
+    - Для опционов — Black–Scholes c параметрами: `S` (perp/index), `K`, `T`, `sigma` из mark IV (или HV30 как фоллбэк, нормализованный), `r` (регулируется UI как `rPct`). Ползунок времени двигает долю оставшегося T.
     - Для PERP‑“ног” — цена равна `S`.
   - График и UX:
     - Блокируется перецентрирование: при первой инициализации фиксируется базовый x‑диапазон ±50% от `S`.
@@ -139,7 +139,7 @@
 - Виджет рынка (`src/components/MarketContextCard.tsx`).
 - Кнопки бэкапа (`src/components/TopBarBackupButtons.tsx`).
 
-**11) Решение по источнику “Index Spot”**
+**11) Решение по источнику “Index” (perp/index anchor)**
 - Корректный якорь для опционов — индекс базового актива. В текущей реализации:
   - Реалтайм‑источник: линейный WS `tickers.ETHUSDT` на `wss://stream.bybit.com/v5/public/linear`, поле `data.indexPrice` — используется повсеместно в окне View (подпись и линия).
   - Фоллбэки: `underlyingPrice` из опционного тикера (WS option), далее — перп/мид и резервные эвристики.
@@ -162,7 +162,7 @@
 - `src/store/store.ts` — доменное состояние с персистом.
 - `src/components/UnifiedPositionsTable.tsx` — портфель, IF‑правила, авто‑settlement, CSV.
 - `src/components/AddPosition.tsx` и `src/components/add-position/*` — добавление позиций с лайв‑чейном.
-- `src/components/PositionView.tsx` — модальное окно расчётов/графиков, “Index Spot” от линейного WS.
+- `src/components/PositionView.tsx` — модальное окно расчётов/графиков, “Index” от линейного WS (ETHUSDT perp).
 - `src/components/MarketContextCard.tsx` — рынок ETHUSDT (TradingView), `BYBIT:ETHUSDT`.
 - `vite.config.ts` — dev‑прокси `/bybit → https://api.bybit.com`.
 
@@ -340,7 +340,7 @@
 
 - Пример PERP ноги:
   - Leg PERP: `ETHUSDT`, qty = 0.5, side = long, entryPrice = 2700.
-  - Текущее S = Index Spot (из linear `indexPrice`) = 2715.
+  - Текущее S = Index (из linear `indexPrice`) = 2715.
   - mid PERP трактуется как S; leg PnL (mid) = (S − entry) · qty = (2715 − 2700) · 0.5 = +7.5.
 
 Примечание: во View PERP‑нога в модели ценообразования имеет цену = S, а опционная нога — `bsPrice`(S, K, T, σ, r). В таблице mid/exec по опционам берутся из котировок, а не из BS‑модели.

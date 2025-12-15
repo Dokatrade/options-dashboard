@@ -1,4 +1,5 @@
 import type { CloseSnapshot, Position, PositionLeg, SpreadPosition } from './types';
+import { legKey } from './legKey';
 
 export type ViewPayload = {
   id: string;
@@ -8,7 +9,7 @@ export type ViewPayload = {
   closeSnapshot?: CloseSnapshot;
   note?: string;
   title: string;
-  hiddenSymbols?: string[];
+  hiddenLegIds?: string[];
   onClosePosition?: () => void;
 };
 
@@ -44,7 +45,7 @@ export const buildPositionViewPayload = (
   extra?: { onClosePosition?: () => void },
 ): ViewPayload => {
   const legs = Array.isArray(position.legs) ? position.legs : [];
-  const hiddenSymbols = legs.filter((L) => L.hidden).map((L) => L.leg.symbol);
+  const hiddenLegIds = legs.map((L, idx) => (L.hidden ? legKey(L, idx) : null)).filter(Boolean) as string[];
   return {
     id: `P:${position.id}`,
     legs,
@@ -53,8 +54,7 @@ export const buildPositionViewPayload = (
     closeSnapshot: position.closeSnapshot,
     note: position.note,
     title,
-    hiddenSymbols: hiddenSymbols.length ? hiddenSymbols : undefined,
+    hiddenLegIds: hiddenLegIds.length ? hiddenLegIds : undefined,
     onClosePosition: extra?.onClosePosition,
   };
 };
-

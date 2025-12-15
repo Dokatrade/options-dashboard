@@ -7,7 +7,7 @@ type SelectionPanelProps = {
   onQtyChange: (value: number) => void;
   onAddLeg: (side: 'short' | 'long') => void;
   onAddPerp: (side: 'short' | 'long') => void;
-  spotPrice?: number;
+  perpPrice?: number;
   perpQty: number;
   perpNotional: number;
   onPerpContractsChange: (value: number) => void;
@@ -26,7 +26,7 @@ export function SelectionPanel({
   onQtyChange,
   onAddLeg,
   onAddPerp,
-  spotPrice,
+  perpPrice,
   perpQty,
   perpNotional,
   onPerpContractsChange,
@@ -34,10 +34,10 @@ export function SelectionPanel({
   onClearSelection,
 }: SelectionPanelProps) {
   const disabled = !selectedRow;
-  const formattedSpot = React.useMemo(() => {
-    if (spotPrice == null || Number.isNaN(spotPrice)) return null;
-    return `$${spotPrice.toFixed(2)}`;
-  }, [spotPrice]);
+  const formattedPerp = React.useMemo(() => {
+    if (perpPrice == null || Number.isNaN(perpPrice)) return null;
+    return `$${perpPrice.toFixed(2)}`;
+  }, [perpPrice]);
 
   return (
     <div className="selection-panel">
@@ -109,7 +109,7 @@ export function SelectionPanel({
             <div>ETHUSDT</div>
           </div>
           <div className="selection-panel__perp-spot muted">
-            {formattedSpot ? `Spot ${formattedSpot}` : 'Spot price unavailable'}
+            {formattedPerp ? `Perp ${formattedPerp}` : 'Perp price unavailable'}
           </div>
         </div>
         <div className="selection-panel__perp-inputs">
@@ -131,7 +131,7 @@ export function SelectionPanel({
               step={1}
               value={perpNotional}
               onChange={(e) => onPerpNotionalChange(Number(e.target.value))}
-              disabled={!spotPrice}
+              disabled={!perpPrice}
             />
           </label>
         </div>

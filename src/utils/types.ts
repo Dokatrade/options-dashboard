@@ -90,6 +90,8 @@ export interface PositionLeg {
   hidden?: boolean; // when true, excluded from all calcs/visuals until unhidden
   settleS?: number; // underlying price used to settle this leg
   settledAt?: number; // ms epoch when settlement was captured
+  exitPrice?: number; // execution price when leg was manually exited
+  exitedAt?: number; // ms epoch when exit was captured
 }
 
 export interface Position {

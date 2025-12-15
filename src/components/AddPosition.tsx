@@ -1,6 +1,6 @@
 import React from 'react';
-import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk, fetchOrderbookL1, fetchSpotEth } from '../services/bybit';
-import { subscribeOptionTicker, subscribeSpotTicker } from '../services/ws';
+import { fetchInstruments, fetchOptionTickers, midPrice, bestBidAsk, fetchOrderbookL1, fetchPerpEth } from '../services/bybit';
+import { subscribeOptionTicker, subscribeLinearTicker } from '../services/ws';
 import { useSlowMode } from '../contexts/SlowModeContext';
 import { useStore, DEFAULT_PORTFOLIO_ID } from '../store/store';
 import type { InstrumentInfo, Leg, OptionType, SpreadPosition } from '../utils/types';
@@ -95,7 +95,7 @@ export function AddPosition() {
     const limited = symbols.slice(0, 180);
     await Promise.all(limited.map((sym) => new Promise<void>((resolve) => {
       let resolved = false;
-      const stop = (sym.includes('-') ? subscribeOptionTicker : subscribeSpotTicker)(sym, (t) => {
+      const stop = (sym.includes('-') ? subscribeOptionTicker : subscribeLinearTicker)(sym, (t) => {
         if (resolved) return;
         resolved = true;
         mergeTickerUpdate(sym, t as Record<string, any>);
@@ -216,9 +216,9 @@ export function AddPosition() {
   }, [expiry, instruments, optType, tickers]);
 
   const performSlowRefresh = React.useCallback(async () => {
-    const [list, spotData] = await Promise.all([
+    const [list, perpData] = await Promise.all([
       fetchOptionTickers(),
-      fetchSpotEth().catch(() => undefined),
+      fetchPerpEth().catch(() => undefined),
     ]);
     if (!mountedRef.current) return;
     setTickers(prev => {
@@ -234,15 +234,23 @@ export function AddPosition() {
         }
         next[sym] = merged;
       });
-      if (spotData?.price != null && isFinite(spotData.price)) {
-        const price = Number(spotData.price);
+      const perp = perpData || {};
+      const mark = Number.isFinite(perp.markPrice) ? Number(perp.markPrice) : undefined;
+      const last = Number.isFinite(perp.lastPrice) ? Number(perp.lastPrice) : undefined;
+      const idx = Number.isFinite(perp.indexPrice) ? Number(perp.indexPrice) : undefined;
+      const bid = Number.isFinite(perp.bid) ? Number(perp.bid) : undefined;
+      const ask = Number.isFinite(perp.ask) ? Number(perp.ask) : undefined;
+      const price = Number.isFinite(perp.price) ? Number(perp.price) : undefined;
+      if (mark != null || last != null || price != null || bid != null || ask != null || idx != null) {
         const existing = next['ETHUSDT'] || {};
+        const anchor = mark ?? last ?? price ?? idx ?? existing.markPrice ?? existing.lastPrice;
         next['ETHUSDT'] = {
           ...existing,
-          markPrice: price,
-          indexPrice: price,
-          bid1Price: existing.bid1Price ?? price,
-          ask1Price: existing.ask1Price ?? price,
+          markPrice: mark ?? anchor ?? existing.markPrice,
+          lastPrice: last ?? existing.lastPrice,
+          indexPrice: idx ?? anchor ?? existing.indexPrice,
+          bid1Price: bid ?? existing.bid1Price ?? anchor,
+          ask1Price: ask ?? existing.ask1Price ?? anchor,
         };
       }
       return next;
@@ -251,7 +259,7 @@ export function AddPosition() {
     const syms = Array.from(new Set([
       ...chainRef.current.map((i) => i.symbol),
       ...draftRef.current.map((d) => d.leg.symbol),
-    ])).slice(0, 200);
+    ])).filter((sym) => sym.includes('-')).slice(0, 200);
     const chunkSize = 25;
     for (let i = 0; i < syms.length; i += chunkSize) {
       const chunk = syms.slice(i, i + chunkSize);
@@ -303,7 +311,9 @@ export function AddPosition() {
     if (slowMode) return;
     let stopped = false;
     const poll = async () => {
-      const syms = Array.from(new Set([...chain.map(i=>i.symbol), ...draft.map(d=>d.leg.symbol)])).slice(0, 200);
+      const syms = Array.from(new Set([...chain.map(i=>i.symbol), ...draft.map(d=>d.leg.symbol)]))
+        .filter((sym) => sym.includes('-'))
+        .slice(0, 200);
       for (const sym of syms) {
         if (stopped) return;
         try {
@@ -384,7 +394,7 @@ export function AddPosition() {
     draft.forEach(d => symbols.add(d.leg.symbol));
     const unsubs = Array.from(symbols).slice(0, 400).map(sym => {
       const isOption = sym.includes('-');
-      const sub = isOption ? subscribeOptionTicker : subscribeSpotTicker;
+      const sub = isOption ? subscribeOptionTicker : subscribeLinearTicker;
       return sub(sym, (t) => setTickers((prev) => {
         const cur = prev[t.symbol] || {};
         const merged: any = { ...cur };
@@ -508,14 +518,21 @@ export function AddPosition() {
     return inst ? formatChainRow(inst) : undefined;
   }, [chainRows, chain, formatChainRow, selectedSymbol]);
 
-  const spotTicker = tickers['ETHUSDT'] || {};
-  const spotPrice = React.useMemo(() => {
-    const mark = spotTicker?.markPrice;
-    if (mark != null && !Number.isNaN(Number(mark))) return Number(mark);
-    const index = spotTicker?.indexPrice;
-    if (index != null && !Number.isNaN(Number(index))) return Number(index);
+  const perpTicker = tickers['ETHUSDT'] || {};
+  const perpPrice = React.useMemo(() => {
+    const candidates = [
+      perpTicker?.markPrice,
+      perpTicker?.lastPrice,
+      perpTicker?.indexPrice,
+      perpTicker?.bid1Price ?? perpTicker?.obBid,
+      perpTicker?.ask1Price ?? perpTicker?.obAsk,
+    ];
+    for (const c of candidates) {
+      const n = Number(c);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
     return undefined;
-  }, [spotTicker]);
+  }, [perpTicker]);
 
   const handleTypeChange = React.useCallback((type: OptionType) => {
     setOptType(type);
@@ -562,33 +579,33 @@ export function AddPosition() {
     const sanitized = Math.max(0.001, Math.round(numeric * 1000) / 1000);
     setPerpQty(sanitized);
     setPerpQtySource('contracts');
-    if (spotPrice && spotPrice > 0) {
-      const notional = Math.round(sanitized * spotPrice * 100) / 100;
+    if (perpPrice && perpPrice > 0) {
+      const notional = Math.round(sanitized * perpPrice * 100) / 100;
       setPerpNotional(notional);
     }
-  }, [perpQty, spotPrice]);
+  }, [perpQty, perpPrice]);
 
   const handlePerpNotionalChange = React.useCallback((value: number) => {
     const numeric = Number.isFinite(value) ? value : perpNotional;
     const sanitized = Math.max(1, Math.round(numeric * 100) / 100);
     setPerpNotional(sanitized);
     setPerpQtySource('usd');
-    if (spotPrice && spotPrice > 0) {
-      const contracts = Math.max(0.001, Math.round((sanitized / spotPrice) * 1000) / 1000);
+    if (perpPrice && perpPrice > 0) {
+      const contracts = Math.max(0.001, Math.round((sanitized / perpPrice) * 1000) / 1000);
       setPerpQty(contracts);
     }
-  }, [perpNotional, spotPrice]);
+  }, [perpNotional, perpPrice]);
 
   React.useEffect(() => {
-    if (!spotPrice || spotPrice <= 0) return;
+    if (!perpPrice || perpPrice <= 0) return;
     if (perpQtySource === 'contracts') {
-      const nextNotional = Math.round(perpQty * spotPrice * 100) / 100;
+      const nextNotional = Math.round(perpQty * perpPrice * 100) / 100;
       setPerpNotional((prev) => (Math.abs(prev - nextNotional) > 0.01 ? nextNotional : prev));
     } else if (perpQtySource === 'usd') {
-      const nextContracts = Math.max(0.001, Math.round((perpNotional / spotPrice) * 1000) / 1000);
+      const nextContracts = Math.max(0.001, Math.round((perpNotional / perpPrice) * 1000) / 1000);
       setPerpQty((prev) => (Math.abs(prev - nextContracts) > 0.0005 ? nextContracts : prev));
     }
-  }, [spotPrice, perpQty, perpNotional, perpQtySource]);
+  }, [perpPrice, perpQty, perpNotional, perpQtySource]);
 
   const updateDraftQty = React.useCallback((index: number, nextQty: number) => {
     setDraft((prev) => prev.map((item, i) => {
@@ -738,7 +755,7 @@ export function AddPosition() {
             showAllStrikes={showAllStrikes}
             loading={loading}
             slowMode={slowMode}
-            spotPrice={spotPrice}
+            perpPrice={perpPrice}
             onTypeChange={handleTypeChange}
             onExpiryChange={handleExpiryChange}
             onDeltaMinChange={handleDeltaMinChange}
@@ -753,7 +770,7 @@ export function AddPosition() {
             onQtyChange={handleQtyChange}
             onAddLeg={addLeg}
             onAddPerp={addPerpLeg}
-            spotPrice={spotPrice}
+            perpPrice={perpPrice}
             perpQty={perpQty}
             perpNotional={perpNotional}
             onPerpContractsChange={handlePerpContractsChange}
