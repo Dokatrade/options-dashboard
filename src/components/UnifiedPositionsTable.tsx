@@ -1960,12 +1960,24 @@ export function UnifiedPositionsTable() {
                     )}
                     {visibleColumns.legs && (
                       <td style={{ ...legsColumnStyle, fontSize: 'calc(1em - 1.5px)' }}>
-                        {r.legs.map((L, i) => {
-                          const isPerp = !String(L.leg.symbol).includes('-');
-                          return (
-                            <div key={i} className="muted">{L.side} {isPerp ? 'PERP' : L.leg.optionType} {isPerp ? '' : L.leg.strike} × {L.qty}</div>
-                          );
-                        })}
+                        {(() => {
+                          const allLabels = r.legs.map((L) => {
+                            const isPerp = !String(L.leg.symbol).includes('-');
+                            return `${L.side} ${isPerp ? 'PERP' : L.leg.optionType} ${isPerp ? '' : L.leg.strike} × ${L.qty}`.trim();
+                          });
+                          const maxShown = 4;
+                          const hasMore = allLabels.length > maxShown;
+                          const visible = allLabels.slice(0, maxShown);
+                          const tooltip = hasMore ? allLabels.join('\n') : undefined;
+                          return visible.map((label, i) => (
+                            <div key={i} className="muted">
+                              {label}
+                              {hasMore && i === maxShown - 1 && (
+                                <span title={tooltip} style={{ marginLeft: 6, cursor: 'help', fontWeight: 600 }}>...</span>
+                              )}
+                            </div>
+                          ));
+                        })()}
                       </td>
                     )}
                     {visibleColumns.expiry && <td style={{ fontSize: 'calc(1em - 2px)' }}>{expLabel} · {dte}</td>}

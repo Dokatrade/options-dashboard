@@ -155,7 +155,8 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
         const sym = String(L.leg.symbol||'');
         const mid = midOf(sym);
         const ex = execFor(sym, L.side);
-        const now = useExecPref ? (ex ?? mid) : mid;
+        const exitPrice = toFiniteNumber((L as any)?.exitPrice);
+        const now = exitPrice ?? (useExecPref ? (ex ?? mid) : mid);
         if (now == null) { upnl = undefined; break; }
         const entry = Number(L.entryPrice) || 0;
         const qty = Number(L.qty) || 1;
@@ -183,28 +184,6 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
     return Number.isFinite(n) ? n : undefined;
   };
 
-  const legExitPnl = (leg: Position['legs'][number]): number | undefined => {
-    const exit = toFiniteNumber((leg as any)?.exitPrice);
-    if (exit == null) return undefined;
-    const entry = Number(leg.entryPrice) || 0;
-    const qty = Number(leg.qty) || 1;
-    const pnl = leg.side === 'short' ? (entry - exit) * qty : (exit - entry) * qty;
-    return Number.isFinite(pnl) ? pnl : undefined;
-  };
-
-  const formatLegLabel = (leg: Position['legs'][number]): string => {
-    const sym = String(leg.leg.symbol || '');
-    const isOption = sym.includes('-');
-    const expiry = Number(leg.leg.expiryMs) || 0;
-    const base = isOption
-      ? `${leg.side} ${leg.leg.optionType}${leg.leg.strike}`
-      : `${leg.side} ${sym}`;
-    if (isOption && expiry > 0) {
-      try { return `${base} · ${new Date(expiry).toISOString().slice(0,10)}`; } catch { return base; }
-    }
-    return base;
-  };
-
   const metrics = React.useMemo(() => {
     // Helpers
     const legMid = (symbol: string): number | undefined => {
@@ -212,19 +191,11 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
       const m = midPrice(t);
       return (m != null && isFinite(m)) ? Number(m) : undefined;
     };
-    const isOptionSym = (sym: string) => String(sym || '').includes('-');
 
-    // Realized PnL (closed items + legs exited in open positions)
+    // Realized PnL (closed items only)
     const realizedFromSpreads = spreadsSel.reduce((acc, p) => acc + (toNumber(p?.closeSnapshot?.pnlExec) ?? 0), 0);
     const realizedFromPositions = positionsSel.reduce((acc, p) => acc + (toNumber(p?.closeSnapshot?.pnlExec) ?? 0), 0);
-    const realizedFromLegs = positionsSel
-      .filter((p) => !p.closeSnapshot)
-      .reduce((acc, p) => {
-        const legs = Array.isArray(p.legs) ? p.legs : [];
-        const sum = legs.reduce((s, L) => s + (legExitPnl(L) ?? 0), 0);
-        return acc + sum;
-      }, 0);
-    const realized = realizedFromSpreads + realizedFromPositions + realizedFromLegs;
+    const realized = realizedFromSpreads + realizedFromPositions;
 
     // Unrealized PnL (open only); совпадает с настройкой таблицы: exec vs mid
     let unrealized = 0;
@@ -248,11 +219,18 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
     });
     // Generic positions
     positionsSel.filter(p => !p.closedAt).forEach((p) => {
-      const legs = Array.isArray(p.legs) ? p.legs.filter(L => !L.hidden && !(L.exitPrice != null && isFinite(Number(L.exitPrice)))) : [];
+      const legs = Array.isArray(p.legs) ? p.legs.filter(L => !L.hidden) : [];
       if (!legs.length) return;
       // Требуем цену для всех ног (exec или mid), иначе пропускаем
       const rows: Array<{ now: number; entry: number; qty: number; sign: number; sym: string } | null> = legs.map((L) => {
         const sym = String(L.leg.symbol || '');
+        const exitPrice = toFiniteNumber((L as any)?.exitPrice);
+        if (exitPrice != null) {
+          const entry = Number(L.entryPrice) || 0;
+          const qty = Number(L.qty) || 1;
+          const sign = L.side === 'short' ? +1 : -1;
+          return { now: exitPrice, entry, qty, sign, sym };
+        }
         const t = tickers[sym] || {};
         const { bid, ask } = bestBidAsk(t);
         const mid = legMid(sym);
@@ -339,7 +317,7 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
     const riskShare = deposit > 0 ? (openRisk / deposit) * 100 : 0;
 
     return { realized, unrealized, openRisk, riskShare };
-  }, [deposit, positionsSel, spreadsSel, tickers]);
+  }, [deposit, positionsSel, spreadsSel, tickers, useExecPref]);
 
   // Refresh mids for Unrealized PnL via REST when SlowMode triggers (initial/schedule/manual)
   React.useEffect(() => {
@@ -422,7 +400,7 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
   const pnlColor = metrics.realized > 0 ? 'var(--gain)' : (metrics.realized < 0 ? 'var(--loss)' : undefined);
   const upnlColor = metrics.unrealized > 0 ? 'var(--gain)' : (metrics.unrealized < 0 ? 'var(--loss)' : undefined);
 
-  type RealizedEntry = { id: string; type: 'spread' | 'position' | 'leg'; label: string; closedAt: number; pnl?: number; ref: SpreadPosition | Position };
+  type RealizedEntry = { id: string; type: 'spread' | 'position'; label: string; closedAt: number; pnl?: number; ref: SpreadPosition | Position };
 
   const realizedEntries = React.useMemo<RealizedEntry[]>(() => {
     const entries: RealizedEntry[] = [];
@@ -457,17 +435,6 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
         return Number.isFinite(raw) ? raw : undefined;
       })();
       entries.push({ id: p.id, type: 'position', label, closedAt: Number(p.closedAt) || 0, pnl, ref: p });
-    });
-    // Legs exited inside open positions
-    positionsSel.filter(p => !p.closeSnapshot).forEach((p) => {
-      const legs = Array.isArray(p.legs) ? p.legs : [];
-      legs.forEach((L, idx) => {
-        const pnl = legExitPnl(L);
-        if (pnl == null) return;
-        const exitAt = Number((L as any)?.exitedAt) || Number(p.closedAt) || Number(p.createdAt) || Date.now();
-        const label = `Leg · ${formatLegLabel(L)}`;
-        entries.push({ id: `${p.id}-leg-${idx}-${exitAt}`, type: 'leg', label, closedAt: exitAt, pnl, ref: p });
-      });
     });
     return entries.sort((a, b) => Number(b.closedAt || 0) - Number(a.closedAt || 0));
   }, [positionsSel, spreadsSel]);
@@ -782,7 +749,7 @@ export function PortfolioSummary({ onOpenSummary }: PortfolioSummaryProps) {
                               textAlign: 'left',
                             }}
                           >
-                            {entry.label || (entry.type === 'spread' ? 'Spread' : (entry.type === 'leg' ? 'Leg' : 'Position'))}
+                            {entry.label || (entry.type === 'spread' ? 'Spread' : 'Position')}
                           </button>
                           <div className="muted" style={{ fontSize: '0.9em' }}>{fmtDateTime(entry.closedAt)}</div>
                         </div>
