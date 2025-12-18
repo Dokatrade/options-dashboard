@@ -322,13 +322,70 @@ export function UnifiedPositionsTable() {
     delete: true,
   }), []);
   const [actionVisibility, setActionVisibility] = React.useState<Record<ActionKey, boolean>>(DEFAULT_ACTION_VISIBILITY);
+  const formatLegNoteLine = React.useCallback((leg: PositionLeg, action: 'add' | 'remove'): string => {
+    const stamp = new Date().toLocaleString('ru-RU', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+    const symbol = String(leg.leg.symbol || '');
+    const isPerp = !symbol.includes('-') || Number(leg.leg.expiryMs) <= 0;
+    const baseAsset = (() => {
+      if (isPerp) {
+        const m = symbol.match(/^([A-Za-z]+?)(USDT|USDC|USD)?$/);
+        return ((m?.[1] ?? symbol) || '—').toUpperCase();
+      }
+      return symbol;
+    })();
+    const qty = Number(leg.qty);
+    const qtyStr = Number.isFinite(qty)
+      ? (() => {
+          const rounded = qty >= 1 ? qty.toFixed(2) : qty.toFixed(4);
+          return rounded.replace(/0+$/,'').replace(/\.$/,'');
+        })()
+      : '';
+    const price = Number(leg.entryPrice);
+    const priceStr = Number.isFinite(price) ? price.toFixed(2) : '';
+    const totalUsd = Number.isFinite(price) && Number.isFinite(qty) ? Math.abs(price * qty) : undefined;
+    const totalLabel = totalUsd != null ? ` ($${totalUsd.toFixed(2)})` : '';
+    const side = leg.side === 'short' ? 'short' : 'long';
+    const removed = action === 'remove' ? ' · removed' : '';
+    const assetLabel = isPerp ? 'perp' : symbol;
+    const qtyPart = qtyStr ? ` ${baseAsset} ${qtyStr}${totalLabel}` : '';
+    const pricePart = priceStr ? ` по $${priceStr}` : '';
+    return `${stamp} ${assetLabel} ${side}${qtyPart}${pricePart}${removed}`.trim();
+  }, []);
+  const appendLegNote = React.useCallback((note: string | undefined, line: string): string => {
+    const logPattern = /^\d{2}\.\d{2}\.\d{4},\s\d{2}:\d{2}:\d{2}/;
+    const raw = note ?? '';
+    const lines = raw.split('\n');
+    const firstLogIdx = lines.findIndex((l) => logPattern.test(l.trimStart()) || /^NEW\s+/.test(l.trimStart()));
+    const splitIdx = firstLogIdx === -1 ? lines.length : firstLogIdx;
+    const prefix = lines.slice(0, splitIdx);
+    const existingLogs = lines
+      .slice(splitIdx)
+      .map((l) => l.replace(/^NEW\s+/, '').trim())
+      .filter(Boolean);
+    const nextLogs = [`NEW ${line}`, ...existingLogs];
+    return [...prefix, ...nextLogs].join('\n');
+  }, []);
   const handleDeleteLeg = React.useCallback((row: Row, legIndex: number): boolean => {
     if (!row.id.startsWith('P:')) return false;
+    const leg = row.legs?.[legIndex];
+    if (!leg) return false;
     if (!window.confirm('Delete this leg from the position? This cannot be undone.')) return false;
     const pid = row.id.slice(2);
     updatePosition(pid, (p) => {
       const legs = p.legs.filter((_, idx) => idx !== legIndex);
-      return { ...p, legs };
+      const noteLine = formatLegNoteLine(leg, 'remove');
+      const note = appendLegNote(p.note, noteLine);
+      return { ...p, legs, note };
+    });
+    setView((current) => {
+      if (!current || current.id !== row.id) return current;
+      const legs = current.legs.filter((_, idx) => idx !== legIndex);
+      const noteLine = formatLegNoteLine(leg, 'remove');
+      const note = appendLegNote(current.note, noteLine);
+      return { ...current, legs, note };
     });
     // If no legs remain, drop the entire position
     const checkRemoval = () => {
@@ -484,6 +541,21 @@ export function UnifiedPositionsTable() {
     setNoteDraft('');
   }, []);
 
+  const saveNotes = React.useCallback((override?: string) => {
+    if (!noteRow) return;
+    const nextValue = override !== undefined ? override : noteDraft;
+    const noteValue = nextValue;
+    const rowId = noteRow.id;
+    if (rowId.startsWith('S:')) {
+      updateSpread(rowId.slice(2), (spread) => ({ ...spread, note: noteValue }));
+    } else if (rowId.startsWith('P:')) {
+      updatePosition(rowId.slice(2), (position) => ({ ...position, note: noteValue }));
+    }
+    setView((current) => current && current.id === rowId ? { ...current, note: noteValue } : current);
+    setNoteRow(null);
+    setNoteDraft('');
+  }, [noteDraft, noteRow, setView, updatePosition, updateSpread]);
+
   React.useEffect(() => {
     if (!noteRow) return;
     const handler = (event: KeyboardEvent) => {
@@ -495,21 +567,6 @@ export function UnifiedPositionsTable() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [noteRow, closeNotes]);
-
-  const saveNotes = React.useCallback(() => {
-    if (!noteRow) return;
-    const trimmed = noteDraft.trim();
-    const noteValue = trimmed.length ? trimmed : undefined;
-    const rowId = noteRow.id;
-    if (rowId.startsWith('S:')) {
-      updateSpread(rowId.slice(2), (spread) => ({ ...spread, note: noteValue }));
-    } else if (rowId.startsWith('P:')) {
-      updatePosition(rowId.slice(2), (position) => ({ ...position, note: noteValue }));
-    }
-    setView((current) => current && current.id === rowId ? { ...current, note: noteValue } : current);
-    setNoteRow(null);
-    setNoteDraft('');
-  }, [noteDraft, noteRow, setView, updatePosition, updateSpread]);
 
   // Load persisted UI prefs
   React.useEffect(() => {
@@ -2288,7 +2345,10 @@ export function UnifiedPositionsTable() {
                                   <div style={{gridColumn:2, gridRow:4}}>{vegaEff != null ? vegaEff.toFixed(3) : '—'}</div>
                                   <div style={{gridColumn:3, gridRow:4}}>{deltaEff != null ? deltaEff.toFixed(3) : '—'}</div>
                                   <div style={{gridColumn:4, gridRow:4}}>{thetaEff != null ? thetaEff.toFixed(3) : '—'}</div>
-                                  <div style={{gridColumn:5, gridRow:4}}>{oi != null ? oi : '—'}</div>
+                                  <div style={{gridColumn:5, gridRow:4}}>{(() => {
+                                    if (!(oi != null && isFinite(oi))) return '—';
+                                    return Math.round(oi);
+                                  })()}</div>
                                   <div style={{gridColumn:6, gridRow:4}}>{volShift != null ? `${volShift.toFixed(1)} [${volShift >= 1 ? '↑' : (volShift <= -1 ? '↓' : '–')}]` : '—'}</div>
                                 </div>
                               </div>
@@ -2321,6 +2381,21 @@ export function UnifiedPositionsTable() {
             const snapshot = buildCloseSnapshot(target);
             applyCloseSnapshot(target, snapshot);
           }}
+          onAddPerpLeg={view.id.startsWith('P:') ? (leg) => {
+            const targetId = view.id;
+            const pid = targetId.slice(2);
+            updatePosition(pid, (p) => {
+              const noteLine = formatLegNoteLine(leg, 'add');
+              const note = appendLegNote(p.note, noteLine);
+              return { ...p, legs: [...p.legs, leg], note };
+            });
+            setView((current) => {
+              if (!current || current.id !== targetId) return current;
+              const noteLine = formatLegNoteLine(leg, 'add');
+              const note = appendLegNote(current.note, noteLine);
+              return { ...current, legs: [...current.legs, leg], note };
+            });
+          } : undefined}
           hiddenLegIds={view.legs.map((L, idx) => L.hidden ? legKey(L, idx) : null).filter(Boolean) as string[]}
           onEdit={() => {
             const current = view;
@@ -2415,8 +2490,9 @@ export function UnifiedPositionsTable() {
                 />
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button className="ghost" onClick={() => { setNoteDraft(''); saveNotes(''); }}>Clear</button>
                 <button className="ghost" onClick={closeNotes}>Cancel</button>
-                <button className="primary" onClick={saveNotes}>Save</button>
+                <button className="primary" onClick={() => saveNotes()}>Save</button>
               </div>
             </div>
           </div>

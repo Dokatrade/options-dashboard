@@ -1,5 +1,5 @@
 import React from 'react';
-import type { PositionLeg, CloseSnapshot, SpreadPosition, Position } from '../utils/types';
+import type { PositionLeg, CloseSnapshot, SpreadPosition, Position, Leg } from '../utils/types';
 import { subscribeLinearTicker, subscribeOptionTicker } from '../services/ws';
 import { midPrice, bestBidAsk, fetchHV30 } from '../services/bybit';
 import { bsPrice, bsImpliedVol } from '../utils/bs';
@@ -10,6 +10,19 @@ import { legKey } from '../utils/legKey';
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 type ChartMode = 'pnl' | 'spot';
+type DisplayLeg = {
+  key: string;
+  leg: PositionLeg;
+  legIndex: number;
+  isPerp: boolean;
+  isExited: boolean;
+  exitPrice?: number;
+  exitedAt?: number;
+  isHidden: boolean;
+  isSynthetic?: boolean;
+  sourceLegIndices?: number[];
+  order: number;
+};
 
 function formatCreatedAtLabel(createdAt?: number): string | null {
   if (!Number.isFinite(createdAt)) return null;
@@ -35,6 +48,7 @@ type Props = {
   onEdit?: () => void;
   onDeleteLeg?: (legIndex: number) => void;
   onExitLeg?: (legIndex: number) => void;
+  onAddPerpLeg?: (leg: PositionLeg) => void;
   variant?: 'modal' | 'summary';
 };
 
@@ -53,6 +67,7 @@ export function PositionView({
   onEdit,
   onDeleteLeg,
   onExitLeg,
+  onAddPerpLeg,
   variant = 'modal',
 }: Props) {
   const isSummary = variant === 'summary';
@@ -85,9 +100,9 @@ export function PositionView({
 
   const clearNote = React.useCallback(() => {
     if (id.startsWith('S:')) {
-      updateSpread(id.slice(2), (sp) => ({ ...sp, note: undefined }));
+      updateSpread(id.slice(2), (sp) => ({ ...sp, note: '' }));
     } else {
-      updatePosition(id.slice(2), (p) => ({ ...p, note: undefined }));
+      updatePosition(id.slice(2), (p) => ({ ...p, note: '' }));
     }
     setNoteDraft('');
     setEditingNote(false);
@@ -112,6 +127,11 @@ export function PositionView({
     const hiddenSet = new Set(resolvedHiddenLegIds || []);
     return legs.filter((L, idx) => !hiddenSet.has(legKey(L, idx)));
   }, [legs, resolvedHiddenLegIds]);
+  const perpSymbol = React.useMemo(() => {
+    const direct = legsCalc.find((L) => !String(L.leg.symbol || '').includes('-'))?.leg.symbol;
+    const inferred = legsCalc.length ? inferUnderlyingSpotSymbol(legsCalc[0]?.leg.symbol) : null;
+    return String(direct || inferred || 'ETHUSDT');
+  }, [legsCalc]);
   // Lock initial X-domain to ±50% around current spot (if available) to prevent re-centering
   const baseDomainRef = React.useRef<{ minX: number; maxX: number } | null>(null);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
@@ -137,6 +157,8 @@ export function PositionView({
   const [xZoom, setXZoom] = React.useState(1); // default: show exactly ±50% around spot at open
   const [yZoom, setYZoom] = React.useState(1);
   const [useExecPnl, setUseExecPnl] = React.useState(false);
+  const [showAllLegs, setShowAllLegs] = React.useState(false);
+  const [gammaScalping, setGammaScalping] = React.useState(false);
   // Draggable modal position
   const [pos, setPos] = React.useState<{ x: number; y: number } | null>(null);
   const draggingRef = React.useRef<{ startX: number; startY: number; startPos: { x: number; y: number } } | null>(null);
@@ -162,6 +184,10 @@ export function PositionView({
       if (typeof s?.yZoom === 'number') setYZoom(Math.max(0.2, Math.min(5, s.yZoom)));
       if (typeof s?.showExpiry === 'boolean') setShowExpiry(s.showExpiry);
       if (typeof s?.useExecPnl === 'boolean') setUseExecPnl(s.useExecPnl);
+      if (typeof s?.showAllLegs === 'boolean') setShowAllLegs(s.showAllLegs);
+      else if (typeof s?.showExited === 'boolean') setShowAllLegs(s.showExited);
+      else if (typeof s?.hideExited === 'boolean') setShowAllLegs(!s.hideExited);
+      if (typeof s?.gammaScalping === 'boolean') setGammaScalping(s.gammaScalping);
       if (s?.chartMode === 'spot' || s?.chartMode === 'pnl') setChartMode(s.chartMode);
       if (s?.spotInterval === '60' || s?.spotInterval === '240' || s?.spotInterval === '1440') setSpotInterval(s.spotInterval);
     } catch {}
@@ -170,10 +196,25 @@ export function PositionView({
     try {
       localStorage.setItem(
         'position-view-ui-v1',
-        JSON.stringify({ showT0, showExpiry, ivShift, rPct, timePos, xZoom, yZoom, useExecPnl, chartMode, spotInterval })
+        JSON.stringify({
+          showT0,
+          showExpiry,
+          ivShift,
+          rPct,
+          timePos,
+          xZoom,
+          yZoom,
+          useExecPnl,
+          showAllLegs,
+          showExited: showAllLegs,
+          hideExited: !showAllLegs,
+          gammaScalping,
+          chartMode,
+          spotInterval,
+        })
       );
     } catch {}
-  }, [showT0, showExpiry, ivShift, rPct, timePos, xZoom, yZoom, useExecPnl, chartMode, spotInterval]);
+  }, [showT0, showExpiry, ivShift, rPct, timePos, xZoom, yZoom, useExecPnl, showAllLegs, gammaScalping, chartMode, spotInterval]);
 
   // Per-position persistence for mouse-positioned view (x/y zoom, time, and display/model params)
   React.useEffect(() => {
@@ -190,6 +231,10 @@ export function PositionView({
         if (typeof entry.showT0 === 'boolean') setShowT0(entry.showT0);
         if (typeof entry.showExpiry === 'boolean') setShowExpiry(entry.showExpiry);
         if (typeof entry.useExecPnl === 'boolean') setUseExecPnl(entry.useExecPnl);
+        if (typeof entry.showAllLegs === 'boolean') setShowAllLegs(entry.showAllLegs);
+        else if (typeof entry.showExited === 'boolean') setShowAllLegs(entry.showExited);
+        else if (typeof entry.hideExited === 'boolean') setShowAllLegs(!entry.hideExited);
+        if (typeof entry.gammaScalping === 'boolean') setGammaScalping(entry.gammaScalping);
         if (entry.spotInterval === '60' || entry.spotInterval === '240' || entry.spotInterval === '1440') setSpotInterval(entry.spotInterval);
       }
     } catch {}
@@ -199,10 +244,118 @@ export function PositionView({
     try {
       const raw = localStorage.getItem('position-view-ui-bypos-v1');
       const map = raw ? JSON.parse(raw) : {};
-      map[viewKey] = { xZoom, yZoom, timePos, ivShift, rPct, showT0, showExpiry, useExecPnl, spotInterval };
+      map[viewKey] = {
+        xZoom,
+        yZoom,
+        timePos,
+        ivShift,
+        rPct,
+        showT0,
+        showExpiry,
+        useExecPnl,
+        showAllLegs,
+        showExited: showAllLegs,
+        hideExited: !showAllLegs,
+        gammaScalping,
+        spotInterval,
+      };
       localStorage.setItem('position-view-ui-bypos-v1', JSON.stringify(map));
     } catch {}
-  }, [viewKey, xZoom, yZoom, timePos, ivShift, rPct, showT0, showExpiry, useExecPnl, spotInterval]);
+  }, [viewKey, xZoom, yZoom, timePos, ivShift, rPct, showT0, showExpiry, useExecPnl, showAllLegs, gammaScalping, spotInterval]);
+
+  // Prepare legs for UI: when Show All is off, hide exited/hidden legs and merge perps by symbol into a single net leg.
+  const legsDisplay = React.useMemo<DisplayLeg[]>(() => {
+    const toNumber = (value: unknown) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : undefined;
+    };
+    const base: DisplayLeg[] = legs.map((L, idx) => {
+      const exitPrice = toNumber((L as any)?.exitPrice);
+      const exitedAt = toNumber((L as any)?.exitedAt);
+      const symbol = String(L.leg.symbol || '');
+      const expiryMs = toNumber(L.leg.expiryMs) ?? 0;
+      const isPerp = !symbol.includes('-') || expiryMs <= 0;
+      const key = legKey(L, idx);
+      const isHidden = (resolvedHiddenLegIds || []).includes(key);
+      return {
+        key,
+        leg: L,
+        legIndex: idx,
+        isPerp,
+        isExited: exitPrice != null,
+        exitPrice: exitPrice ?? undefined,
+        exitedAt: exitPrice != null ? exitedAt : undefined,
+        isHidden,
+        order: idx,
+      };
+    });
+    if (showAllLegs) return base;
+
+    const active = base.filter((entry) => !entry.isExited && !entry.isHidden);
+    const options: DisplayLeg[] = [];
+    const perpsBySymbol = new Map<string, DisplayLeg[]>();
+
+    active.forEach((entry) => {
+      if (!entry.isPerp) {
+        options.push(entry);
+        return;
+      }
+      const sym = String(entry.leg.leg.symbol || '');
+      const list = perpsBySymbol.get(sym) ?? [];
+      list.push(entry);
+      perpsBySymbol.set(sym, list);
+    });
+
+    const aggregated: DisplayLeg[] = [];
+    perpsBySymbol.forEach((items, sym) => {
+      if (!items.length) return;
+      if (items.length === 1) {
+        aggregated.push(items[0]);
+        return;
+      }
+      let netQty = 0;
+      let netEntryNotional = 0;
+      let earliest = Number.POSITIVE_INFINITY;
+      let allHidden = true;
+      items.forEach((it) => {
+        const qty = Number(it.leg.qty) || 0;
+        const entry = Number(it.leg.entryPrice) || 0;
+        const sign = it.leg.side === 'long' ? 1 : -1;
+        netQty += sign * qty;
+        netEntryNotional += sign * qty * entry;
+        const createdAtNum = Number(it.leg.createdAt);
+        if (Number.isFinite(createdAtNum)) earliest = Math.min(earliest, createdAtNum);
+        allHidden = allHidden && it.isHidden;
+      });
+      if (Math.abs(netQty) < 1e-9) return;
+      const side = netQty >= 0 ? 'long' : 'short';
+      const qty = Math.abs(netQty);
+      const entryPriceRaw = netEntryNotional / netQty;
+      const templateLeg = items[0].leg.leg;
+      const aggLeg: PositionLeg = {
+        leg: { ...templateLeg },
+        side,
+        qty,
+        entryPrice: Number.isFinite(entryPriceRaw) ? Math.abs(entryPriceRaw) : 0,
+        createdAt: Number.isFinite(earliest) ? earliest : items[0].leg.createdAt,
+      };
+      aggregated.push({
+        key: `agg-${sym}-${items[0].legIndex}`,
+        leg: aggLeg,
+        legIndex: items[0].legIndex,
+        isPerp: true,
+        isExited: false,
+        isHidden: allHidden,
+        isSynthetic: true,
+        sourceLegIndices: items.map((it) => it.legIndex),
+        order: Math.min(...items.map((it) => it.order)),
+      });
+    });
+
+    const combined = [...options, ...aggregated];
+    combined.sort((a, b) => (a.order - b.order));
+    return combined;
+  }, [legs, resolvedHiddenLegIds, showAllLegs]);
 
   // (Reset view handler removed per request)
 
@@ -254,14 +407,26 @@ export function PositionView({
   }, [spotInterval]);
 
   React.useEffect(() => {
-    const symbols = Array.from(new Set(legs.map(l => l.leg.symbol)));
+    const symbols = Array.from(new Set([
+      ...legs.map(l => l.leg.symbol),
+      ...(gammaScalping ? [perpSymbol] : []),
+    ]));
     const unsubs = symbols.slice(0, 300).map(sym => {
       const isOption = sym.includes('-');
       const sub = isOption ? subscribeOptionTicker : subscribeLinearTicker;
-      return sub(sym, (t) => setTickers(prev => ({ ...prev, [t.symbol]: { ...(prev[t.symbol] || {}), ...t } })));
+      return sub(sym, (t) => setTickers((prev) => {
+        const cur = prev[t.symbol] || {};
+        const merged: any = { ...cur };
+        const keys: string[] = Object.keys(t as any);
+        for (const k of keys) {
+          const v: any = (t as any)[k];
+          if (v != null && !(Number.isNaN(v))) merged[k] = v;
+        }
+        return { ...prev, [t.symbol]: merged };
+      }));
     });
     return () => { unsubs.forEach(u => u()); };
-  }, [legsCalc]);
+  }, [gammaScalping, legs, perpSymbol]);
 
   React.useEffect(() => {
     const symbols = Array.from(new Set(legsCalc
@@ -424,6 +589,7 @@ export function PositionView({
       }
       return {
         L,
+        isPerp,
         bid: isExited ? undefined : bidNum,
         ask: isExited ? undefined : askNum,
         mid: midSafe,
@@ -442,6 +608,11 @@ export function PositionView({
     const netExec = det.reduce((a, x) => a + (x.L.side === 'short' ? 1 : -1) * x.execPrice * x.L.qty, 0);
     const pnl = netEntry - netMid;
     const pnlExec = netEntry - netExec;
+    const perpNetEntry = det.reduce((a, x) => a + (x.isPerp ? (x.L.side === 'short' ? 1 : -1) * x.L.entryPrice * x.L.qty : 0), 0);
+    const perpNetMid = det.reduce((a, x) => a + (x.isPerp ? (x.L.side === 'short' ? 1 : -1) * x.mid * x.L.qty : 0), 0);
+    const perpNetExec = det.reduce((a, x) => a + (x.isPerp ? (x.L.side === 'short' ? 1 : -1) * x.execPrice * x.L.qty : 0), 0);
+    const perpPnl = perpNetEntry - perpNetMid;
+    const perpPnlExec = perpNetEntry - perpNetExec;
     const greeks = det.reduce((a, x) => ({
       delta: a.delta + (x.d ?? 0) * x.L.qty,
       vega: a.vega + (x.v ?? 0) * x.L.qty,
@@ -478,10 +649,40 @@ export function PositionView({
       }
       return undefined;
     })();
-    return { det, netEntry, netMid, netExec, pnl, pnlExec, greeks, dteLabel, spot, priceHint };
+    return { det, netEntry, netMid, netExec, pnl, pnlExec, perpNetEntry, perpNetMid, perpNetExec, perpPnl, perpPnlExec, greeks, dteLabel, spot, priceHint };
   }, [legsCalc, linearIndex, tickers]);
 
   const netPnlValue = useExecPnl ? calc.pnlExec : calc.pnl;
+  const gammaScalpPnlValue = useExecPnl ? calc.perpPnlExec : calc.perpPnl;
+  const perpEntryPrice = React.useMemo(() => {
+    const t = tickers[perpSymbol] || {};
+    const mid = midPrice(t);
+    if (mid != null && Number.isFinite(mid) && mid > 0) return mid;
+    const mark = Number(t?.markPrice);
+    if (Number.isFinite(mark) && mark > 0) return mark;
+    const idx = Number(t?.indexPrice);
+    if (Number.isFinite(idx) && idx > 0) return idx;
+    const linear = Number(linearIndex?.[perpSymbol]);
+    if (Number.isFinite(linear) && linear > 0) return linear;
+    const spot = Number(calc.spot);
+    if (Number.isFinite(spot) && spot > 0) return spot;
+    const hint = Number(calc.priceHint);
+    if (Number.isFinite(hint) && hint > 0) return hint;
+    return undefined;
+  }, [calc.priceHint, calc.spot, linearIndex, perpSymbol, tickers]);
+  const applyGammaScalpDeltaAction = React.useCallback((action: { kind: 'adjust'; delta: number } | { kind: 'zero' }) => {
+    if (!onAddPerpLeg) return;
+    const currentDelta = Number(calc.greeks.delta);
+    if (!Number.isFinite(currentDelta)) return;
+    const diff = action.kind === 'zero' ? (0 - currentDelta) : Number(action.delta);
+    if (!Number.isFinite(diff) || Math.abs(diff) < 1e-6) return;
+    const qty = Number(Math.abs(diff).toFixed(4));
+    if (!(qty > 0)) return;
+    if (!(perpEntryPrice != null && Number.isFinite(perpEntryPrice) && perpEntryPrice > 0)) return;
+    const perpLeg: Leg = { symbol: perpSymbol, strike: 0, optionType: 'C', expiryMs: 0 };
+    const side = diff > 0 ? 'long' : 'short';
+    onAddPerpLeg({ leg: perpLeg, side, qty, entryPrice: perpEntryPrice, createdAt: Date.now() });
+  }, [calc.greeks.delta, onAddPerpLeg, perpEntryPrice, perpSymbol]);
 
   const optionPriceAt = React.useCallback((leg: PositionLeg, S: number, nowMs: number): number => {
     const exitPxRaw = Number((leg as any)?.exitPrice);
@@ -1216,6 +1417,38 @@ export function PositionView({
                     <input type="checkbox" checked={useExecPnl} onChange={(e)=>setUseExecPnl(e.target.checked)} />
                     <span className="muted">PNL($) exec</span>
                   </label>
+                  <label style={{display:'flex', alignItems:'center', gap:6}}>
+                    <input type="checkbox" checked={showAllLegs} onChange={(e)=>setShowAllLegs(e.target.checked)} />
+                    <span className="muted">Show All</span>
+                  </label>
+                  <label style={{display:'flex', alignItems:'center', gap:6}}>
+                    <input type="checkbox" checked={gammaScalping} onChange={(e)=>setGammaScalping(e.target.checked)} />
+                    <span className="muted">Gamma Scalping</span>
+                  </label>
+                  {gammaScalping && onAddPerpLeg && (
+                    <div style={{display:'flex', gap:4, alignItems:'center', flexWrap:'wrap'}}>
+                      {[
+                        { label: '+0.05', action: { kind: 'adjust' as const, delta: 0.05 }, title: `Δ += 0.05 via ${perpSymbol}` },
+                        { label: '+0.1', action: { kind: 'adjust' as const, delta: 0.1 }, title: `Δ += 0.10 via ${perpSymbol}` },
+                        { label: '+0.2', action: { kind: 'adjust' as const, delta: 0.2 }, title: `Δ += 0.20 via ${perpSymbol}` },
+                        { label: 'zero', action: { kind: 'zero' as const }, title: `Δ → 0 via ${perpSymbol}` },
+                        { label: '-0.2', action: { kind: 'adjust' as const, delta: -0.2 }, title: `Δ -= 0.20 via ${perpSymbol}` },
+                        { label: '-0.1', action: { kind: 'adjust' as const, delta: -0.1 }, title: `Δ -= 0.10 via ${perpSymbol}` },
+                        { label: '-0.05', action: { kind: 'adjust' as const, delta: -0.05 }, title: `Δ -= 0.05 via ${perpSymbol}` },
+                      ].map((b) => (
+                        <button
+                          key={b.label}
+                          type="button"
+                          className="ghost"
+                          style={{height: 22, lineHeight: '22px', padding: '0 8px', fontSize: '0.8em'}}
+                          onClick={() => applyGammaScalpDeltaAction(b.action)}
+                          title={b.title}
+                        >
+                          {b.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1270,23 +1503,30 @@ export function PositionView({
             <div><div className="muted">Δ (Delta)</div><div>{calc.greeks.delta.toFixed(3)}</div></div>
             <div><div className="muted">Vega</div><div>{calc.greeks.vega.toFixed(3)}</div></div>
             <div><div className="muted">Θ (Theta)</div><div>{calc.greeks.theta.toFixed(3)}</div></div>
+            {gammaScalping && (
+              <div>
+                <div className="muted">G.Scalp{useExecPnl && <span style={{marginLeft:4, fontSize:'0.75em'}}>exec</span>}</div>
+                <div>
+                  {(() => {
+                    if (!Number.isFinite(gammaScalpPnlValue)) return '—';
+                    const color = gammaScalpPnlValue > 0 ? 'var(--gain)' : (gammaScalpPnlValue < 0 ? 'var(--loss)' : undefined);
+                    return <span style={color ? { color } : undefined}>{gammaScalpPnlValue.toFixed(2)}</span>;
+                  })()}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="grid" style={{gap: 6}}>
-                {legs.map((L, legIndex) => {
+                {legsDisplay.map((disp) => {
+              const { leg: L, legIndex, key: legId, isPerp, isExited, exitPrice, exitedAt, isHidden, isSynthetic } = disp;
               const t = tickers[L.leg.symbol] || {};
               const { bid, ask } = bestBidAsk(t);
               const bidNumRaw = bid != null && isFinite(Number(bid)) ? Number(bid) : undefined;
               const askNumRaw = ask != null && isFinite(Number(ask)) ? Number(ask) : undefined;
               const symbol = String(L.leg.symbol || '');
               const expiryMs = Number(L.leg.expiryMs) || 0;
-              const isPerp = !symbol.includes('-') || expiryMs <= 0;
               const midRaw = midPrice(t);
-              const exitPxRaw = Number((L as any)?.exitPrice);
-              const exitPrice = Number.isFinite(exitPxRaw) ? exitPxRaw : undefined;
-              const exitedAtRaw = Number((L as any)?.exitedAt);
-              const exitedAt = Number.isFinite(exitedAtRaw) ? exitedAtRaw : undefined;
-              const isExited = exitPrice != null;
               const midMarket = midRaw != null && isFinite(Number(midRaw)) ? Number(midRaw) : undefined;
               const mid = isExited ? exitPrice : midMarket;
               const iv = isExited ? undefined : (t?.markIv != null ? Number(t.markIv) : undefined);
@@ -1294,15 +1534,15 @@ export function PositionView({
               const vRaw = isExited ? 0 : (t?.vega != null ? Number(t.vega) : undefined);
               const thRaw = isExited ? 0 : (t?.theta != null ? Number(t.theta) : undefined);
               const qty = Number(L.qty) || 1;
-              const entry = Number(L.entryPrice);
+              const entryPrice = Number(L.entryPrice);
               const isShort = L.side === 'short';
-              const midSafe = (mid != null && isFinite(mid)) ? mid : (isFinite(entry) ? entry : 0);
+              const midSafe = (mid != null && isFinite(mid)) ? mid : (isFinite(entryPrice) ? entryPrice : 0);
               const execPrice = isExited ? exitPrice : (isShort ? (askNumRaw ?? midSafe) : (bidNumRaw ?? midSafe));
               const execSafe = (execPrice != null && isFinite(execPrice)) ? execPrice : midSafe;
-              const pnlMid = (isFinite(entry) ? (isShort ? (entry - midSafe) : (midSafe - entry)) * qty : undefined);
-              const pnlExec = (isFinite(entry) ? (isShort ? (entry - execSafe) : (execSafe - entry)) * qty : undefined);
+              const pnlMid = (isFinite(entryPrice) ? (isShort ? (entryPrice - midSafe) : (midSafe - entryPrice)) * qty : undefined);
+              const pnlExec = (isFinite(entryPrice) ? (isShort ? (entryPrice - execSafe) : (execSafe - entryPrice)) * qty : undefined);
               const sgn = L.side === 'long' ? 1 : -1;
-              const usdNotional = isPerp && isFinite(qty) ? qty * (midSafe ?? entry ?? 0) : undefined;
+              const usdNotional = isPerp && isFinite(qty) ? qty * (midSafe ?? entryPrice ?? 0) : undefined;
               const bidNum = isExited ? undefined : bidNumRaw;
               const askNum = isExited ? undefined : askNumRaw;
               const x = {
@@ -1321,16 +1561,16 @@ export function PositionView({
                 exitedAt,
                 isExited,
               };
-              const legId = legKey(L, legIndex);
-              const isHidden = (resolvedHiddenLegIds || []).includes(legId);
-              const exitTooltip = isExited && exitPrice != null
-                ? `Exited at ${exitPrice.toFixed(4)}${exitedAt ? ` · ${new Date(exitedAt).toLocaleString()}` : ''}`
-                : 'Exit only this leg (sell/buy back)';
+              const exitTooltip = isSynthetic
+                ? 'Use Show All to manage individual perp fills'
+                : (isExited && exitPrice != null
+                  ? `Exited at ${exitPrice.toFixed(4)}${exitedAt ? ` · ${new Date(exitedAt).toLocaleString()}` : ''}`
+                  : 'Exit only this leg (sell/buy back)');
               return (
               <div key={legId} style={{border: '1px solid var(--border)', borderRadius: 8, padding: 6, fontSize: 'calc(1em - 3px)', ...(isHidden ? { background: 'rgba(128,128,128,.12)' } : {})}}>
-                <div style={{display:'flex', justifyContent:'space-between', marginBottom: 2}}>
+                  <div style={{display:'flex', justifyContent:'space-between', marginBottom: 2}}>
                   <div style={{display:'flex', alignItems:'center', gap:8}}>
-                    {onToggleLegHidden && (
+                    {onToggleLegHidden && !isSynthetic && (
                       <button type="button" className="ghost" style={{height: 22, lineHeight: '22px', padding: '0 8px', cursor:'pointer', position:'relative', zIndex:2}} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleLegHidden?.(legId, legIndex); }}>
                           {isHidden ? 'Unhide' : 'Hide'}
                       </button>
@@ -1339,7 +1579,7 @@ export function PositionView({
                   </div>
                   <div style={{display:'flex', alignItems:'center', gap:8}}>
                     <div className="muted" style={{fontSize:'calc(1em + 2px)'}}>{Number(L.leg.expiryMs) > 0 ? new Date(Number(L.leg.expiryMs)).toISOString().slice(0,10) : ''}</div>
-                    {onExitLeg && (
+                    {onExitLeg && !isSynthetic && (
                       <button
                         type="button"
                         className="ghost"
@@ -1360,7 +1600,7 @@ export function PositionView({
                         disabled={isExited}
                       >{isExited ? 'Exited' : 'Exit'}</button>
                     )}
-                    {onDeleteLeg && (
+                    {onDeleteLeg && !isSynthetic && (
                       <button
                         type="button"
                         className="ghost"
@@ -1450,7 +1690,11 @@ export function PositionView({
                   <div style={{gridColumn:2, gridRow:4}}>{x.v != null ? x.v.toFixed(3) : '—'}</div>
                   <div style={{gridColumn:3, gridRow:4}}>{x.d != null ? x.d.toFixed(3) : '—'}</div>
                   <div style={{gridColumn:4, gridRow:4}}>{x.th != null ? x.th.toFixed(3) : '—'}</div>
-                  <div style={{gridColumn:5, gridRow:4}}>{x.oi != null ? x.oi : '—'}</div>
+                  <div style={{gridColumn:5, gridRow:4}}>{(() => {
+                    const oi = x.oi;
+                    if (!(oi != null && Number.isFinite(oi))) return '—';
+                    return Math.round(oi);
+                  })()}</div>
                   <div style={{gridColumn:6, gridRow:4}}>{(() => {
                     const t = tickers[L.leg.symbol] || {};
                     const S = t?.indexPrice != null ? Number(t.indexPrice) : (calc.spot != null ? Number(calc.spot) : undefined);
@@ -1541,7 +1785,26 @@ export function PositionView({
                 color: hasNote ? 'inherit' : 'rgba(200,200,200,0.6)',
               }}
             >
-              {hasNote ? noteValue.trim() : '—'}
+              {hasNote ? (() => {
+                const lines = noteValue.split('\n');
+                const logPattern = /^\s*(NEW\s+)?\d{2}\.\d{2}\.\d{4},\s\d{2}:\d{2}:\d{2}/;
+                const logCount = lines.filter((l) => logPattern.test(l)).length;
+                return lines.map((line, idx) => {
+                  const trimmed = line.trimStart();
+                  const newMatch = trimmed.startsWith('NEW ');
+                  const showNew = newMatch && logCount > 1;
+                  const text = newMatch ? trimmed.replace(/^NEW\s+/, '') : line;
+                  const content = text.length ? text : '\u00a0';
+                  return (
+                    <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {showNew && (
+                        <span style={{ color: '#7a0f0f', fontWeight: 700, fontSize: '0.95em' }}>New</span>
+                      )}
+                      <span style={{ whiteSpace: 'pre-wrap', flex: 1 }}>{content}</span>
+                    </div>
+                  );
+                });
+              })() : '—'}
             </div>
           )}
         </div>
