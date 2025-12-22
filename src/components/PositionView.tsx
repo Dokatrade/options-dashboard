@@ -35,6 +35,16 @@ function formatCreatedAtLabel(createdAt?: number): string | null {
   return `(created ${datePart} ${timePart})`;
 }
 
+function formatQtyDisplay(value: unknown, decimals = 4): string {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value ?? '');
+  const fixed = num.toFixed(decimals);
+  return fixed
+    .replace(/(\.\d*?[1-9])0+$/,'$1')
+    .replace(/\.0+$/,'')
+    .replace(/\.$/,'');
+}
+
 type Props = {
   id: string;
   legs: PositionLeg[];
@@ -135,12 +145,12 @@ export function PositionView({
       const qtyMatch = line.match(/\bperp\s+(?:long|short)\s+[A-Z0-9]+\s+([0-9]*\.?[0-9]+)/i);
       const priceMatch = line.match(/по\s*\$([0-9]*\.?[0-9]+)/i);
       if (qtyMatch && priceMatch) {
-        const qty = Number(qtyMatch[1]);
-        const price = Number(priceMatch[1]);
-        if (Number.isFinite(qty) && Number.isFinite(price)) {
-          acc.volume += Math.abs(qty * price);
-        }
+      const qty = Number(qtyMatch[1]);
+      const price = Number(priceMatch[1]);
+      if (Number.isFinite(qty) && Number.isFinite(price)) {
+        acc.volume += Math.abs(qty * price);
       }
+    }
       acc.count += 1;
       return acc;
     }, { volume: 0, count: 0 });
@@ -213,6 +223,7 @@ export function PositionView({
       .sort();
     return `pv-v1:${parts.join('|')}`;
   }, [legs]);
+  const gammaPrefKey = React.useMemo(() => `pv-gs-v1:${id}`, [id]);
   // Persist UI controls
   React.useEffect(() => {
     try {
@@ -230,8 +241,6 @@ export function PositionView({
       if (typeof s?.showAllLegs === 'boolean') setShowAllLegs(s.showAllLegs);
       else if (typeof s?.showExited === 'boolean') setShowAllLegs(s.showExited);
       else if (typeof s?.hideExited === 'boolean') setShowAllLegs(!s.hideExited);
-      if (typeof s?.gammaScalping === 'boolean') setGammaScalping(s.gammaScalping);
-      if (typeof s?.autoGammaScalp === 'boolean') setAutoGammaScalp(s.autoGammaScalp);
       if (typeof s?.autoGsThreshold === 'number' && Number.isFinite(s.autoGsThreshold) && s.autoGsThreshold > 0) setAutoGsThreshold(s.autoGsThreshold);
       if (typeof s?.autoGsIntervalMs === 'number' && Number.isFinite(s.autoGsIntervalMs) && s.autoGsIntervalMs > 0) setAutoGsIntervalMs(s.autoGsIntervalMs);
       if (typeof s?.autoGsMaxQty === 'number' && Number.isFinite(s.autoGsMaxQty) && s.autoGsMaxQty > 0) setAutoGsMaxQty(s.autoGsMaxQty);
@@ -239,6 +248,20 @@ export function PositionView({
       if (s?.spotInterval === '60' || s?.spotInterval === '240' || s?.spotInterval === '1440') setSpotInterval(s.spotInterval);
     } catch {}
   }, []);
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem('position-view-gs-v1');
+      const map = raw ? JSON.parse(raw) : {};
+      const entry = map[gammaPrefKey];
+      if (entry && typeof entry === 'object') {
+        if (typeof entry.gammaScalping === 'boolean') setGammaScalping(entry.gammaScalping);
+        if (typeof entry.autoGammaScalp === 'boolean') setAutoGammaScalp(entry.autoGammaScalp);
+      } else {
+        setGammaScalping(false);
+        setAutoGammaScalp(false);
+      }
+    } catch {}
+  }, [gammaPrefKey]);
   React.useEffect(() => {
     try {
       localStorage.setItem(
@@ -255,8 +278,6 @@ export function PositionView({
           showAllLegs,
           showExited: showAllLegs,
           hideExited: !showAllLegs,
-          gammaScalping,
-          autoGammaScalp,
           autoGsThreshold,
           autoGsIntervalMs,
           autoGsMaxQty,
@@ -265,11 +286,22 @@ export function PositionView({
         })
       );
     } catch {}
-  }, [showT0, showExpiry, ivShift, rPct, timePos, xZoom, yZoom, useExecPnl, showAllLegs, gammaScalping, autoGammaScalp, autoGsThreshold, autoGsIntervalMs, autoGsMaxQty, chartMode, spotInterval]);
+  }, [showT0, showExpiry, ivShift, rPct, timePos, xZoom, yZoom, useExecPnl, showAllLegs, autoGsThreshold, autoGsIntervalMs, autoGsMaxQty, chartMode, spotInterval]);
   React.useEffect(() => {
     if (!gammaScalping && autoGammaScalp) setAutoGammaScalp(false);
     if (!gammaScalping && showAutoGsSettings) setShowAutoGsSettings(false);
   }, [gammaScalping, autoGammaScalp, showAutoGsSettings]);
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem('position-view-gs-v1');
+      const map = raw ? JSON.parse(raw) : {};
+      const prev = map[gammaPrefKey];
+      const next = { gammaScalping, autoGammaScalp };
+      if (prev && prev.gammaScalping === next.gammaScalping && prev.autoGammaScalp === next.autoGammaScalp) return;
+      map[gammaPrefKey] = next;
+      localStorage.setItem('position-view-gs-v1', JSON.stringify(map));
+    } catch {}
+  }, [gammaPrefKey, gammaScalping, autoGammaScalp]);
 
   // Per-position persistence for mouse-positioned view (x/y zoom, time, and display/model params)
   React.useEffect(() => {
@@ -289,8 +321,6 @@ export function PositionView({
         if (typeof entry.showAllLegs === 'boolean') setShowAllLegs(entry.showAllLegs);
         else if (typeof entry.showExited === 'boolean') setShowAllLegs(entry.showExited);
         else if (typeof entry.hideExited === 'boolean') setShowAllLegs(!entry.hideExited);
-        if (typeof entry.gammaScalping === 'boolean') setGammaScalping(entry.gammaScalping);
-        if (typeof entry.autoGammaScalp === 'boolean') setAutoGammaScalp(entry.autoGammaScalp);
         if (typeof entry.autoGsThreshold === 'number' && Number.isFinite(entry.autoGsThreshold) && entry.autoGsThreshold > 0) setAutoGsThreshold(entry.autoGsThreshold);
         if (typeof entry.autoGsIntervalMs === 'number' && Number.isFinite(entry.autoGsIntervalMs) && entry.autoGsIntervalMs > 0) setAutoGsIntervalMs(entry.autoGsIntervalMs);
         if (typeof entry.autoGsMaxQty === 'number' && Number.isFinite(entry.autoGsMaxQty) && entry.autoGsMaxQty > 0) setAutoGsMaxQty(entry.autoGsMaxQty);
@@ -315,8 +345,6 @@ export function PositionView({
         showAllLegs,
         showExited: showAllLegs,
         hideExited: !showAllLegs,
-        gammaScalping,
-        autoGammaScalp,
         autoGsThreshold,
         autoGsIntervalMs,
         autoGsMaxQty,
@@ -324,7 +352,7 @@ export function PositionView({
       };
       localStorage.setItem('position-view-ui-bypos-v1', JSON.stringify(map));
     } catch {}
-  }, [viewKey, xZoom, yZoom, timePos, ivShift, rPct, showT0, showExpiry, useExecPnl, showAllLegs, gammaScalping, autoGammaScalp, autoGsThreshold, autoGsIntervalMs, autoGsMaxQty, spotInterval]);
+  }, [viewKey, xZoom, yZoom, timePos, ivShift, rPct, showT0, showExpiry, useExecPnl, showAllLegs, autoGsThreshold, autoGsIntervalMs, autoGsMaxQty, spotInterval]);
 
   // Prepare legs for UI: when Show All is off, hide exited/hidden legs and merge perps by symbol into a single net leg.
   const legsDisplay = React.useMemo<DisplayLeg[]>(() => {
@@ -354,15 +382,11 @@ export function PositionView({
     });
     if (showAllLegs) return base;
 
-    const active = base.filter((entry) => !entry.isExited && !entry.isHidden);
-    const options: DisplayLeg[] = [];
+    const options: DisplayLeg[] = base.filter((entry) => !entry.isPerp && !entry.isExited && !entry.isHidden);
+    const perpsAll = base.filter((entry) => entry.isPerp && !entry.isExited);
     const perpsBySymbol = new Map<string, DisplayLeg[]>();
 
-    active.forEach((entry) => {
-      if (!entry.isPerp) {
-        options.push(entry);
-        return;
-      }
+    perpsAll.forEach((entry) => {
       const sym = String(entry.leg.leg.symbol || '');
       const list = perpsBySymbol.get(sym) ?? [];
       list.push(entry);
@@ -419,6 +443,7 @@ export function PositionView({
     combined.sort((a, b) => (a.order - b.order));
     return combined;
   }, [legs, resolvedHiddenLegIds, showAllLegs]);
+  const hiddenSet = React.useMemo(() => new Set(resolvedHiddenLegIds || []), [resolvedHiddenLegIds]);
 
   // (Reset view handler removed per request)
 
@@ -1090,7 +1115,7 @@ export function PositionView({
     const delta = Number(calc.greeks.delta);
     const threshold = (Number.isFinite(autoGsThreshold) && autoGsThreshold > 0) ? autoGsThreshold : AUTO_GS_DELTA_THRESHOLD;
     const minInterval = (Number.isFinite(autoGsIntervalMs) && autoGsIntervalMs > 0) ? autoGsIntervalMs : AUTO_GS_MIN_INTERVAL_MS;
-    const maxQty = (Number.isFinite(autoGsMaxQty) && autoGsMaxQty > 0) ? autoGsMaxQty : undefined;
+    const maxQty = (typeof autoGsMaxQty === 'number' && Number.isFinite(autoGsMaxQty) && autoGsMaxQty > 0) ? autoGsMaxQty : undefined;
     if (!Number.isFinite(delta)) return;
     const hysteresis = threshold * 1.1;
     const resetBand = threshold * 0.6;
@@ -1125,9 +1150,11 @@ export function PositionView({
     // keep pending until delta settles or timeout elapses
   }, [autoGammaScalp, gammaScalping, calc.greeks.delta, autoGsThreshold, autoGsIntervalMs, autoGsMaxQty, alreadyExited, onAddPerpLeg, applyGammaScalpDeltaAction, perpEntryPrice]);
 
-  const formatPerpExitLines = React.useCallback((): string[] => {
+  const formatPerpExitLines = React.useCallback((indices?: number[]): string[] => {
     const lines: string[] = [];
-    legs.forEach((L) => {
+    const targetSet = indices ? new Set(indices) : null;
+    legs.forEach((L, idx) => {
+      if (targetSet && !targetSet.has(idx)) return;
       const sym = String(L.leg.symbol || '');
       if (!sym || sym.includes('-')) return;
       const t = tickers[sym] || {};
@@ -1136,7 +1163,7 @@ export function PositionView({
       const display = (price != null && isFinite(Number(price))) ? Number(price).toFixed(2) : 'n/a';
       const label = L.side === 'long' ? 'bid' : 'ask';
       const qty = Number(L.qty) || 1;
-      const qtyLabel = Number.isFinite(qty) ? `×${qty}` : '';
+      const qtyLabel = Number.isFinite(qty) ? `×${formatQtyDisplay(qty)}` : '';
       lines.push(`${L.side === 'short' ? 'Short' : 'Long'} ${sym} ${qtyLabel} @ ${label} ${display}`);
     });
     return lines;
@@ -1735,8 +1762,9 @@ export function PositionView({
               const dRaw = isExited ? 0 : (t?.delta != null ? Number(t.delta) : (isPerp ? 1 : undefined));
               const vRaw = isExited ? 0 : (t?.vega != null ? Number(t.vega) : undefined);
               const thRaw = isExited ? 0 : (t?.theta != null ? Number(t.theta) : undefined);
-              const qty = Number(L.qty) || 1;
-              const entryPrice = Number(L.entryPrice);
+      const qtyRaw = Number(L.qty) || 1;
+      const qty = qtyRaw;
+      const entryPrice = Number(L.entryPrice);
               const isShort = L.side === 'short';
               const midSafe = (mid != null && isFinite(mid)) ? mid : (isFinite(entryPrice) ? entryPrice : 0);
               const execPrice = isExited ? exitPrice : (isShort ? (askNumRaw ?? midSafe) : (bidNumRaw ?? midSafe));
@@ -1744,9 +1772,23 @@ export function PositionView({
               const pnlMid = (isFinite(entryPrice) ? (isShort ? (entryPrice - midSafe) : (midSafe - entryPrice)) * qty : undefined);
               const pnlExec = (isFinite(entryPrice) ? (isShort ? (entryPrice - execSafe) : (execSafe - entryPrice)) * qty : undefined);
               const sgn = L.side === 'long' ? 1 : -1;
-              const usdNotional = isPerp && isFinite(qty) ? qty * (midSafe ?? entryPrice ?? 0) : undefined;
+      const usdNotional = isPerp && isFinite(qty) ? qty * (midSafe ?? entryPrice ?? 0) : undefined;
               const bidNum = isExited ? undefined : bidNumRaw;
               const askNum = isExited ? undefined : askNumRaw;
+              const sourceIndices = Array.from(new Set(
+                (disp.sourceLegIndices ?? [])
+                  .filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < legs.length)
+              ));
+              const sourcePerpTargets = sourceIndices
+                .map((idx) => ({ idx, leg: legs[idx] }))
+                .filter(({ leg }) => {
+                  if (!leg) return false;
+                  const sym = String(leg.leg.symbol || '');
+                  if (!sym || sym.includes('-')) return false;
+                  const exitRaw = (leg as any)?.exitPrice;
+                  return !(exitRaw != null && isFinite(Number(exitRaw)));
+                });
+              const hasSyntheticBatchActions = !showAllLegs && isSynthetic && isPerp && sourcePerpTargets.length > 0;
               const x = {
                 L,
                 bid: bidNum,
@@ -1763,25 +1805,27 @@ export function PositionView({
                 exitedAt,
                 isExited,
               };
-              const exitTooltip = isSynthetic
-                ? 'Use Show All to manage individual perp fills'
-                : (isExited && exitPrice != null
-                  ? `Exited at ${exitPrice.toFixed(4)}${exitedAt ? ` · ${new Date(exitedAt).toLocaleString()}` : ''}`
-                  : 'Exit only this leg (sell/buy back)');
+              const exitTooltip = (() => {
+                if (isSynthetic && hasSyntheticBatchActions) return 'Exit all active perps in this net leg';
+                if (isSynthetic) return 'Use Show All to manage individual perp fills';
+                if (isExited && exitPrice != null) return `Exited at ${exitPrice.toFixed(4)}${exitedAt ? ` · ${new Date(exitedAt).toLocaleString()}` : ''}`;
+                return 'Exit only this leg (sell/buy back)';
+              })();
+              const exitDisabled = !hasSyntheticBatchActions && isExited;
               return (
               <div key={legId} style={{border: '1px solid var(--border)', borderRadius: 8, padding: 6, fontSize: 'calc(1em - 3px)', ...(isHidden ? { background: 'rgba(128,128,128,.12)' } : {})}}>
                   <div style={{display:'flex', justifyContent:'space-between', marginBottom: 2}}>
                   <div style={{display:'flex', alignItems:'center', gap:8}}>
-                    {onToggleLegHidden && !isSynthetic && (
-                      <button type="button" className="ghost" style={{height: 22, lineHeight: '22px', padding: '0 8px', cursor:'pointer', position:'relative', zIndex:2}} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleLegHidden?.(legId, legIndex); }}>
+                    {onToggleLegHidden && (!isSynthetic || hasSyntheticBatchActions || showAllLegs) && (
+                      <button type="button" className="ghost" style={{height: 22, lineHeight: '22px', padding: '0 8px', cursor:'pointer', position:'relative', zIndex:2}} onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (hasSyntheticBatchActions) { const targets = sourcePerpTargets.filter(({ leg, idx }) => { if (!leg) return false; const key = legKey(leg, idx); const currentlyHidden = hiddenSet.has(key); return isHidden ? currentlyHidden : !currentlyHidden; }); if (!targets.length) return; targets.forEach(({ leg, idx }) => { if (!leg) return; const srcId = legKey(leg, idx); onToggleLegHidden?.(srcId, idx); }); } else { onToggleLegHidden?.(legId, legIndex); } }}>
                           {isHidden ? 'Unhide' : 'Hide'}
                       </button>
                     )}
-                    <div style={{fontSize:'calc(1em + 2px)'}}><strong>{L.side}</strong> {L.leg.optionType} {L.leg.strike} × {L.qty}{isPerp && usdNotional != null && isFinite(usdNotional) ? ` ($${usdNotional.toFixed(0)})` : ''}</div>
+                    <div style={{fontSize:'calc(1em + 2px)'}}><strong>{L.side}</strong> {L.leg.optionType} {L.leg.strike} × {formatQtyDisplay(L.qty)}{isPerp && usdNotional != null && isFinite(usdNotional) ? ` ($${usdNotional.toFixed(0)})` : ''}</div>
                   </div>
                   <div style={{display:'flex', alignItems:'center', gap:8}}>
                     <div className="muted" style={{fontSize:'calc(1em + 2px)'}}>{Number(L.leg.expiryMs) > 0 ? new Date(Number(L.leg.expiryMs)).toISOString().slice(0,10) : ''}</div>
-                    {onExitLeg && !isSynthetic && (
+                    {onExitLeg && (!isSynthetic || hasSyntheticBatchActions || showAllLegs) && (
                       <button
                         type="button"
                         className="ghost"
@@ -1790,19 +1834,30 @@ export function PositionView({
                           height: 22,
                           lineHeight: '22px',
                           padding: '0 8px',
-                          cursor: isExited ? 'not-allowed' : 'pointer',
-                          color: isExited ? '#9ba0a6' : undefined,
+                          cursor: exitDisabled ? 'not-allowed' : 'pointer',
+                          color: exitDisabled ? '#9ba0a6' : undefined,
                         }}
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
-                          if (isExited) return;
+                          if (exitDisabled) return;
+                          if (hasSyntheticBatchActions) {
+                            const targetIndices = sourcePerpTargets.map((t) => t.idx);
+                            if (!targetIndices.length) return;
+                            const lines = formatPerpExitLines(targetIndices);
+                            const message = lines.length
+                              ? `Exit all perps in this group?\n${lines.join('\n')}`
+                              : 'Exit all perps in this group?';
+                            if (!window.confirm(message)) return;
+                            targetIndices.forEach((idx) => onExitLeg(idx));
+                            return;
+                          }
                           onExitLeg(legIndex);
                         }}
-                        disabled={isExited}
-                      >{isExited ? 'Exited' : 'Exit'}</button>
+                        disabled={exitDisabled}
+                      >{exitDisabled ? 'Exited' : 'Exit'}</button>
                     )}
-                    {onDeleteLeg && !isSynthetic && (
+                    {onDeleteLeg && (!isSynthetic || hasSyntheticBatchActions || showAllLegs) && (
                       <button
                         type="button"
                         className="ghost"
@@ -1810,6 +1865,23 @@ export function PositionView({
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
+                          if (hasSyntheticBatchActions) {
+                            const targets = sourcePerpTargets.map((t) => t.idx).sort((a, b) => b - a);
+                            if (!targets.length) return;
+                            const desc = sourcePerpTargets.map(({ leg }) => {
+                              const qtyVal = Number((leg as any)?.qty);
+                              const qtyLabel = Number.isFinite(qtyVal) ? ` ×${formatQtyDisplay(qtyVal)}` : '';
+                              const sideLabel = (leg as any)?.side === 'short' ? 'Short' : 'Long';
+                              const symLabel = (leg as any)?.leg?.symbol ?? '';
+                              return `${sideLabel} ${symLabel}${qtyLabel}`;
+                            });
+                            const message = desc.length
+                              ? `Delete all active perps in this group?\n${desc.join('\n')}`
+                              : 'Delete all active perps in this group?';
+                            if (!window.confirm(message)) return;
+                            targets.forEach((idx) => onDeleteLeg(idx));
+                            return;
+                          }
                           onDeleteLeg(legIndex);
                         }}
                   >Del</button>

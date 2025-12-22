@@ -19,27 +19,40 @@ export function PortfolioManagerModal({ onClose, onOpenSummary }: Props) {
   const [editingError, setEditingError] = React.useState<string | null>(null);
 
   const stats = React.useMemo(() => {
-    const countMap = new Map<string, { spreads: number; positions: number }>();
-    const inc = (id: string, key: 'spreads' | 'positions') => {
-      const entry = countMap.get(id) ?? { spreads: 0, positions: 0 };
+    type CountEntry = { spreads: number; positions: number; openSpreads: number; openPositions: number };
+    const makeEntry = (): CountEntry => ({ spreads: 0, positions: 0, openSpreads: 0, openPositions: 0 });
+    const countMap = new Map<string, CountEntry>();
+    let total = 0;
+    let totalOpen = 0;
+    const inc = (id: string, key: 'spreads' | 'positions', isOpen: boolean) => {
+      const entry = countMap.get(id) ?? makeEntry();
       entry[key] += 1;
+      if (isOpen) {
+        if (key === 'spreads') {
+          entry.openSpreads += 1;
+        } else {
+          entry.openPositions += 1;
+        }
+      }
+      total += 1;
+      if (isOpen) totalOpen += 1;
       countMap.set(id, entry);
     };
     spreads.forEach((spread) => {
       const pid = spread.portfolioId ?? DEFAULT_PORTFOLIO_ID;
-      inc(pid, 'spreads');
+      inc(pid, 'spreads', !spread.closedAt);
     });
     positions.forEach((position) => {
       const pid = position.portfolioId ?? DEFAULT_PORTFOLIO_ID;
-      inc(pid, 'positions');
+      inc(pid, 'positions', !position.closedAt);
     });
-    const totalPositions = positions.length + spreads.length;
-    countMap.set(DEFAULT_PORTFOLIO_ID, { spreads: 0, positions: totalPositions });
+    countMap.set(DEFAULT_PORTFOLIO_ID, { spreads: 0, positions: total, openSpreads: 0, openPositions: totalOpen });
     return portfolios.map((meta) => {
-      const entry = countMap.get(meta.id) ?? { spreads: 0, positions: 0 };
+      const entry = countMap.get(meta.id) ?? makeEntry();
       return {
         ...meta,
         itemCount: entry.positions + entry.spreads,
+        openCount: entry.openPositions + entry.openSpreads,
       };
     });
   }, [portfolios, positions, spreads]);
@@ -116,6 +129,7 @@ export function PortfolioManagerModal({ onClose, onOpenSummary }: Props) {
               <div className="muted" style={{ fontSize: '0.9em' }}>Deleting a portfolio moves its positions and spreads to <strong>Default</strong>.</div>
               {stats.map((meta) => {
                 const total = meta.itemCount;
+                const open = meta.openCount;
                 const isDefault = meta.id === DEFAULT_PORTFOLIO_ID;
                 const isActive = meta.id === activePortfolioId;
                 const isEditing = editingId === meta.id;
@@ -168,7 +182,7 @@ export function PortfolioManagerModal({ onClose, onOpenSummary }: Props) {
                             {isActive && <span className="muted" style={{ fontSize: '0.85em' }}>(active)</span>}
                           </div>
                           <div className="muted" style={{ fontSize: '0.85em' }}>
-                            Positions {total}
+                            Open Positions {open}/{total}
                           </div>
                         </>
                       )}
