@@ -7,6 +7,7 @@ import { bsImpliedVol } from '../utils/bs';
 import type { Position, PositionLeg, SpreadPosition, SettlementMap, CloseSnapshot } from '../utils/types';
 import { describeStrategy, type StrategyLeg } from '../utils/strategyDetection';
 import { downloadCSV, toCSV } from '../utils/csv';
+import { inferUnderlyingSpotSymbol } from '../utils/underlying';
 import { PositionView } from './PositionView';
 import { EditPositionModal } from './EditPositionModal';
 import { IfModal, IfRule, IfCond, IfOperand, IfSide, IfComparator, IfChain, IfConditionTemplate, migrateRule } from './IfModal';
@@ -81,6 +82,9 @@ type ActionKey =
   | 'settle'
   | 'close'
   | 'delete';
+
+const AUTO_GS_DELTA_THRESHOLD = 0.05;
+const AUTO_GS_MIN_INTERVAL_MS = 1500;
 
 const COLUMN_CONFIG: Array<{ key: ColumnKey; label: string }> = [
   { key: 'type', label: 'Type' },
@@ -218,6 +222,8 @@ export function UnifiedPositionsTable() {
   const { slowMode, setSlowMode: setGlobalSlowMode, slowStats, manualRefresh, register } = useSlowMode();
   const rowsRef = React.useRef<Row[]>([]);
   const autoSettleAttemptRef = React.useRef<Map<string, number>>(new Map());
+  const autoGsStateRef = React.useRef<Map<string, { last: number; pending: boolean; pendingUntil?: number; lastSign?: number; lastActionDelta?: number; mountAt: number }>>(new Map());
+  const autoGsSymbolLockRef = React.useRef<Map<string, { side: 'long' | 'short'; until: number }>>(new Map());
   const [hvStats, setHvStats] = React.useState<HV30Stats | undefined>();
   const [rPct, setRPct] = React.useState(0);
   const [ifRow, setIfRow] = React.useState<Row | null>(null);
@@ -370,6 +376,109 @@ export function UnifiedPositionsTable() {
     const nextLogs = [`NEW ${line}`, ...existingLogs];
     return [...prefix, ...nextLogs].join('\n');
   }, []);
+  const buildViewKey = React.useCallback((legs: PositionLeg[]): string => {
+    const parts = (legs ?? [])
+      .map((L) => `${L.side}:${L.leg.symbol}:${L.leg.optionType}:${L.leg.strike}:${L.leg.expiryMs}:${L.qty}`)
+      .sort();
+    return `pv-v1:${parts.join('|')}`;
+  }, []);
+  const loadAutoGsSettings = React.useCallback((legs: PositionLeg[]) => {
+    const fallback = { threshold: AUTO_GS_DELTA_THRESHOLD, minInterval: AUTO_GS_MIN_INTERVAL_MS, maxQty: undefined as number | undefined };
+    try {
+      const rawGlobal = localStorage.getItem('position-view-ui-v1');
+      const global = rawGlobal ? JSON.parse(rawGlobal) : {};
+      const rawPerPos = localStorage.getItem('position-view-ui-bypos-v1');
+      const perPosMap = rawPerPos ? JSON.parse(rawPerPos) : {};
+      const viewKey = buildViewKey(legs);
+      const pick = (obj: any) => ({
+        threshold: Number.isFinite(obj?.autoGsThreshold) && obj.autoGsThreshold > 0 ? Number(obj.autoGsThreshold) : undefined,
+        minInterval: Number.isFinite(obj?.autoGsIntervalMs) && obj.autoGsIntervalMs > 0 ? Number(obj.autoGsIntervalMs) : undefined,
+        maxQty: Number.isFinite(obj?.autoGsMaxQty) && obj.autoGsMaxQty > 0 ? Number(obj.autoGsMaxQty) : undefined,
+      });
+      const perPos = pick(perPosMap?.[viewKey] ?? {});
+      const base = pick(global ?? {});
+      return {
+        threshold: perPos.threshold ?? base.threshold ?? AUTO_GS_DELTA_THRESHOLD,
+        minInterval: perPos.minInterval ?? base.minInterval ?? AUTO_GS_MIN_INTERVAL_MS,
+        maxQty: perPos.maxQty ?? base.maxQty,
+      };
+    } catch {
+      return fallback;
+    }
+  }, [buildViewKey]);
+  const loadAutoGsPrefs = React.useCallback((rowId: string) => {
+    try {
+      const raw = localStorage.getItem('position-view-gs-v1');
+      const map = raw ? JSON.parse(raw) : {};
+      const key = `pv-gs-v1:${rowId}`;
+      const entry = map?.[key];
+      return {
+        gammaScalping: entry?.gammaScalping === true,
+        autoGammaScalp: entry?.autoGammaScalp === true,
+      };
+    } catch {
+      return { gammaScalping: false, autoGammaScalp: false };
+    }
+  }, []);
+  const computePerpSymbol = React.useCallback((legs: PositionLeg[]) => {
+    const direct = legs.find((L) => {
+      const sym = String(L.leg.symbol || '');
+      const expiryMs = Number(L.leg.expiryMs) || 0;
+      return !sym.includes('-') || expiryMs <= 0;
+    })?.leg.symbol;
+    const inferred = legs.length ? inferUnderlyingSpotSymbol(legs[0].leg.symbol) : null;
+    return String(direct || inferred || 'ETHUSDT');
+  }, []);
+  const computePerpEntryPrice = React.useCallback((perpSymbol: string) => {
+    const t = tickersRef.current[perpSymbol] || {};
+    const { bid, ask } = bestBidAsk(t);
+    const mid = bid != null && ask != null ? (bid + ask) / 2 : undefined;
+    const mark = Number(t?.markPrice);
+    const last = Number(t?.lastPrice);
+    const idx = Number(t?.indexPrice);
+    const priceCandidates = [mid, mark, last, idx].filter((v) => Number.isFinite(v) && Number(v) > 0) as number[];
+    return priceCandidates[0];
+  }, []);
+  const computeNetDelta = React.useCallback((legs: PositionLeg[]) => {
+    const tickers = tickersRef.current;
+    let net = 0;
+    for (const L of legs) {
+      if (L.hidden) continue;
+      const exitPrice = Number((L as any)?.exitPrice);
+      if (Number.isFinite(exitPrice)) continue;
+      const sym = String(L.leg.symbol || '');
+      const isPerp = !sym.includes('-') || Number(L.leg.expiryMs) <= 0;
+      const t = tickers[sym] || {};
+      const raw = isPerp ? 1 : Number(t?.delta);
+      if (!Number.isFinite(raw)) continue;
+      const qty = Number(L.qty) || 1;
+      const sign = L.side === 'long' ? 1 : -1;
+      net += sign * raw * qty;
+    }
+    return net;
+  }, []);
+  const addPerpLegToPosition = React.useCallback((pid: string, perpSymbol: string, side: 'long' | 'short', qty: number, price: number): boolean => {
+    if (!(qty > 0)) return false;
+    const perpLeg: PositionLeg = {
+      leg: { symbol: perpSymbol, strike: 0, optionType: 'C', expiryMs: 0 },
+      side,
+      qty,
+      entryPrice: price,
+      createdAt: Date.now(),
+    };
+    updatePosition(pid, (p) => {
+      const noteLine = formatLegNoteLine(perpLeg, 'add');
+      const note = appendLegNote(p.note, noteLine);
+      return { ...p, legs: [...p.legs, perpLeg], note };
+    });
+    setView((current) => {
+      if (!current || current.id !== `P:${pid}`) return current;
+      const noteLine = formatLegNoteLine(perpLeg, 'add');
+      const note = appendLegNote(current.note, noteLine);
+      return { ...current, legs: [...current.legs, perpLeg], note };
+    });
+    return true;
+  }, [appendLegNote, formatLegNoteLine, updatePosition]);
   const handleDeleteLeg = React.useCallback((row: Row, legIndex: number): boolean => {
     if (!row.id.startsWith('P:')) return false;
     const leg = row.legs?.[legIndex];
@@ -673,6 +782,69 @@ export function UnifiedPositionsTable() {
     rowsRef.current = rows;
     void runAutoSettle();
   }, [rows, runAutoSettle]);
+  React.useEffect(() => {
+    const timer = setInterval(() => {
+      const rowsSnapshot = rowsRef.current;
+      if (!rowsSnapshot.length) return;
+      rowsSnapshot.forEach((row) => {
+        if (!row.id.startsWith('P:')) return;
+        if (row.closedAt != null || row.closeSnapshot) return;
+        const prefs = loadAutoGsPrefs(row.id);
+        if (!prefs.gammaScalping || !prefs.autoGammaScalp) return;
+        const delta = computeNetDelta(row.legs);
+        if (!Number.isFinite(delta)) return;
+        const settings = loadAutoGsSettings(row.legs);
+        const threshold = (Number.isFinite(settings.threshold) && settings.threshold > 0) ? settings.threshold : AUTO_GS_DELTA_THRESHOLD;
+        const minInterval = (Number.isFinite(settings.minInterval) && settings.minInterval > 0) ? settings.minInterval : AUTO_GS_MIN_INTERVAL_MS;
+        const maxQty = (typeof settings.maxQty === 'number' && Number.isFinite(settings.maxQty) && settings.maxQty > 0) ? settings.maxQty : undefined;
+        const hysteresis = threshold * 1.1;
+        const resetBand = threshold * 0.6;
+        const now = Date.now();
+        const stateMap = autoGsStateRef.current;
+        const state = stateMap.get(row.id) ?? { last: 0, pending: false, pendingUntil: undefined, lastSign: undefined, lastActionDelta: undefined, mountAt: Date.now() };
+        stateMap.set(row.id, state);
+        if (now - state.mountAt < minInterval) return;
+        if (state.pending) {
+          if (Math.abs(delta) <= resetBand || (state.lastSign != null && Math.sign(delta) !== state.lastSign && Math.abs(delta) < threshold * 0.9)) {
+            state.pending = false;
+            state.pendingUntil = undefined;
+          } else {
+            if (state.pendingUntil && now < state.pendingUntil) return;
+            state.pending = false;
+          }
+        }
+        if (Math.abs(delta) < hysteresis) return;
+        if (state.lastActionDelta != null && Math.abs(delta - state.lastActionDelta) < threshold * 0.25) return;
+        if (state.pending) return;
+        if (now - state.last < minInterval) return;
+        const sign = delta > 0 ? 1 : -1;
+        if (state.lastSign === sign && Math.abs(delta) < threshold * 1.3 && now - state.last < minInterval * 2) return;
+        const perpSymbol = computePerpSymbol(row.legs);
+        const price = computePerpEntryPrice(perpSymbol);
+        if (!(price != null && Number.isFinite(price) && price > 0)) return;
+        const diff = -delta;
+        const baseQty = Number(Math.abs(diff).toFixed(4));
+        const qty = maxQty != null ? Math.max(0, Math.min(baseQty, maxQty)) : baseQty;
+        if (!(qty > 0)) return;
+        const side = diff > 0 ? 'long' : 'short';
+        const symbolLock = autoGsSymbolLockRef.current.get(perpSymbol);
+        if (symbolLock && now < symbolLock.until) {
+          if (symbolLock.side !== side) return; // avoid flip-flops across positions
+        }
+        state.pending = true;
+        const handled = addPerpLegToPosition(row.id.slice(2), perpSymbol, side, qty, price);
+        if (handled) {
+          const lockUntil = now + Math.max(minInterval * 2, 5000);
+          autoGsSymbolLockRef.current.set(perpSymbol, { side, until: lockUntil });
+          state.last = Date.now();
+          state.lastSign = sign;
+          state.lastActionDelta = delta;
+          state.pendingUntil = state.last + Math.max(minInterval * 2, 3000);
+        }
+      });
+    }, 900);
+    return () => clearInterval(timer);
+  }, [addPerpLegToPosition, computeNetDelta, computePerpEntryPrice, computePerpSymbol, loadAutoGsPrefs, loadAutoGsSettings]);
   const prevPortfolioIdRef = React.useRef(activePortfolioId);
   React.useEffect(() => {
     if (prevPortfolioIdRef.current === activePortfolioId) return;
