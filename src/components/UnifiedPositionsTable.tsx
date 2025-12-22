@@ -27,6 +27,7 @@ type Row = {
   id: string;
   kind: 'vertical' | 'multi';
   legs: PositionLeg[];
+  removedLegs?: PositionLeg[];
   createdAt: number;
   closedAt?: number;
   closeSnapshot?: CloseSnapshot;
@@ -165,6 +166,7 @@ function fromPosition(p: Position): Row {
     note: p.note,
     portfolioId: p.portfolioId,
     favorite: p.favorite,
+    removedLegs: p.removedLegs,
     settlements: p.settlements,
   };
 }
@@ -322,7 +324,7 @@ export function UnifiedPositionsTable() {
     delete: true,
   }), []);
   const [actionVisibility, setActionVisibility] = React.useState<Record<ActionKey, boolean>>(DEFAULT_ACTION_VISIBILITY);
-  const formatLegNoteLine = React.useCallback((leg: PositionLeg, action: 'add' | 'remove'): string => {
+  const formatLegNoteLine = React.useCallback((leg: PositionLeg, action: 'add' | 'remove' | 'restore'): string => {
     const stamp = new Date().toLocaleString('ru-RU', {
       day: '2-digit', month: '2-digit', year: 'numeric',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
@@ -348,7 +350,7 @@ export function UnifiedPositionsTable() {
     const totalUsd = Number.isFinite(price) && Number.isFinite(qty) ? Math.abs(price * qty) : undefined;
     const totalLabel = totalUsd != null ? ` ($${totalUsd.toFixed(2)})` : '';
     const side = leg.side === 'short' ? 'short' : 'long';
-    const removed = action === 'remove' ? ' · removed' : '';
+    const removed = action === 'remove' ? ' · removed' : (action === 'restore' ? ' · restored' : '');
     const assetLabel = isPerp ? 'perp' : symbol;
     const qtyPart = qtyStr ? ` ${baseAsset} ${qtyStr}${totalLabel}` : '';
     const pricePart = priceStr ? ` по $${priceStr}` : '';
@@ -373,24 +375,31 @@ export function UnifiedPositionsTable() {
     const leg = row.legs?.[legIndex];
     if (!leg) return false;
     if (!window.confirm('Delete this leg from the position? This cannot be undone.')) return false;
+    const removedAt = Date.now();
+    const removedLeg = { ...leg, removedAt };
     const pid = row.id.slice(2);
     updatePosition(pid, (p) => {
       const legs = p.legs.filter((_, idx) => idx !== legIndex);
       const noteLine = formatLegNoteLine(leg, 'remove');
       const note = appendLegNote(p.note, noteLine);
-      return { ...p, legs, note };
+      const removedLegs = [...(p.removedLegs ?? []), removedLeg];
+      return { ...p, legs, removedLegs, note };
     });
     setView((current) => {
       if (!current || current.id !== row.id) return current;
       const legs = current.legs.filter((_, idx) => idx !== legIndex);
       const noteLine = formatLegNoteLine(leg, 'remove');
       const note = appendLegNote(current.note, noteLine);
-      return { ...current, legs, note };
+      const removedLegs = [...((current as any)?.removedLegs ?? []), removedLeg];
+      return { ...current, legs, note, removedLegs } as any;
     });
     // If no legs remain, drop the entire position
     const checkRemoval = () => {
       const next = useStore.getState().positions.find((p) => p.id === pid);
-      if (!next || next.legs.length === 0) removePosition(pid);
+      if (!next) return;
+      const liveLegs = Array.isArray(next.legs) ? next.legs.length : 0;
+      const archived = Array.isArray((next as any).removedLegs) ? (next as any).removedLegs.length : 0;
+      if (liveLegs === 0 && archived === 0) removePosition(pid);
     };
     setTimeout(checkRemoval, 0);
     return true;
@@ -2456,7 +2465,18 @@ export function UnifiedPositionsTable() {
                       .filter((v) => Number.isFinite(v));
                     const baseCreated = Number.isFinite(pos.createdAt) ? Number(pos.createdAt) : Date.now();
                     const viewCreatedAt = legTimes.length ? Math.min(baseCreated, ...legTimes) : baseCreated;
-                    setView({ id: 'P:' + pos.id, kind: 'multi', legs: pos.legs, createdAt: viewCreatedAt, closedAt: pos.closedAt, closeSnapshot: pos.closeSnapshot, note: pos.note, favorite: pos.favorite, portfolioId: pos.portfolioId });
+                    setView({
+                      id: 'P:' + pos.id,
+                      kind: 'multi',
+                      legs: pos.legs,
+                      removedLegs: pos.removedLegs,
+                      createdAt: viewCreatedAt,
+                      closedAt: pos.closedAt,
+                      closeSnapshot: pos.closeSnapshot,
+                      note: pos.note,
+                      favorite: pos.favorite,
+                      portfolioId: pos.portfolioId,
+                    });
                   }
                 }
               } catch {}

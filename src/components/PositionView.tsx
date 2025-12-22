@@ -9,6 +9,8 @@ import { SpotPriceChart } from './SpotPriceChart';
 import { legKey } from '../utils/legKey';
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+const AUTO_GS_DELTA_THRESHOLD = 0.05;
+const AUTO_GS_MIN_INTERVAL_MS = 1500;
 type ChartMode = 'pnl' | 'spot';
 type DisplayLeg = {
   key: string;
@@ -54,7 +56,7 @@ type Props = {
 
 export function PositionView({
   id,
-  legs,
+  legs: legsProp,
   createdAt,
   closedAt,
   closeSnapshot,
@@ -75,6 +77,7 @@ export function PositionView({
   const updatePosition = useStore((s) => s.updatePosition);
   const storeSpread = useStore(React.useCallback((s) => id.startsWith('S:') ? s.spreads.find((sp) => `S:${sp.id}` === id) : undefined, [id]));
   const storePosition = useStore(React.useCallback((s) => id.startsWith('P:') ? s.positions.find((p) => `P:${p.id}` === id) : undefined, [id]));
+  const legs = React.useMemo(() => storePosition?.legs ?? legsProp, [storePosition?.legs, legsProp]);
   const noteValue = storeSpread?.note ?? storePosition?.note ?? note ?? '';
   const [editingNote, setEditingNote] = React.useState(false);
   const [noteDraft, setNoteDraft] = React.useState(noteValue);
@@ -109,6 +112,39 @@ export function PositionView({
   }, [id, updatePosition, updateSpread]);
 
   const hasNote = React.useMemo(() => noteValue.trim().length > 0, [noteValue]);
+  const usdFormatter = React.useMemo(
+    () => new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: false }),
+    []
+  );
+  const perpTradeSummary = React.useMemo(() => {
+    const logPattern = /^\s*(NEW\s+)?\d{2}\.\d{2}\.\d{4},\s\d{2}:\d{2}:\d{2}/;
+    return noteValue.split('\n').reduce((acc, rawLine) => {
+      if (!logPattern.test(rawLine)) return acc;
+      const line = rawLine.replace(/^\s*NEW\s+/, '').trim();
+      if (!/\bperp\b/i.test(line)) return acc;
+      if (/\bremoved\b/i.test(line)) return acc;
+      const totalMatch = line.match(/\(\$([0-9.,]+)\)/);
+      if (totalMatch) {
+        const parsed = Number(totalMatch[1].replace(/,/g, ''));
+        if (Number.isFinite(parsed)) {
+          acc.volume += Math.abs(parsed);
+          acc.count += 1;
+          return acc;
+        }
+      }
+      const qtyMatch = line.match(/\bperp\s+(?:long|short)\s+[A-Z0-9]+\s+([0-9]*\.?[0-9]+)/i);
+      const priceMatch = line.match(/по\s*\$([0-9]*\.?[0-9]+)/i);
+      if (qtyMatch && priceMatch) {
+        const qty = Number(qtyMatch[1]);
+        const price = Number(priceMatch[1]);
+        if (Number.isFinite(qty) && Number.isFinite(price)) {
+          acc.volume += Math.abs(qty * price);
+        }
+      }
+      acc.count += 1;
+      return acc;
+    }, { volume: 0, count: 0 });
+  }, [noteValue]);
 
   const positionCreatedAt = React.useMemo(() => {
     const fallback = Number.isFinite(createdAt) ? Number(createdAt) : Date.now();
@@ -134,6 +170,8 @@ export function PositionView({
   }, [legsCalc]);
   // Lock initial X-domain to ±50% around current spot (if available) to prevent re-centering
   const baseDomainRef = React.useRef<{ minX: number; maxX: number } | null>(null);
+  const autoGammaRef = React.useRef<{ last: number; pending: boolean; pendingUntil?: number; lastSign?: number; lastActionDelta?: number }>({ last: 0, pending: false, pendingUntil: undefined, lastSign: undefined, lastActionDelta: undefined });
+  const mountAtRef = React.useRef<number>(Date.now());
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
   const [showT0, setShowT0] = React.useState(true);
   const [showExpiry, setShowExpiry] = React.useState(true);
@@ -159,6 +197,11 @@ export function PositionView({
   const [useExecPnl, setUseExecPnl] = React.useState(false);
   const [showAllLegs, setShowAllLegs] = React.useState(false);
   const [gammaScalping, setGammaScalping] = React.useState(false);
+  const [autoGammaScalp, setAutoGammaScalp] = React.useState(false);
+  const [autoGsThreshold, setAutoGsThreshold] = React.useState(AUTO_GS_DELTA_THRESHOLD);
+  const [autoGsIntervalMs, setAutoGsIntervalMs] = React.useState(AUTO_GS_MIN_INTERVAL_MS);
+  const [autoGsMaxQty, setAutoGsMaxQty] = React.useState<number | undefined>(undefined);
+  const [showAutoGsSettings, setShowAutoGsSettings] = React.useState(false);
   // Draggable modal position
   const [pos, setPos] = React.useState<{ x: number; y: number } | null>(null);
   const draggingRef = React.useRef<{ startX: number; startY: number; startPos: { x: number; y: number } } | null>(null);
@@ -188,6 +231,10 @@ export function PositionView({
       else if (typeof s?.showExited === 'boolean') setShowAllLegs(s.showExited);
       else if (typeof s?.hideExited === 'boolean') setShowAllLegs(!s.hideExited);
       if (typeof s?.gammaScalping === 'boolean') setGammaScalping(s.gammaScalping);
+      if (typeof s?.autoGammaScalp === 'boolean') setAutoGammaScalp(s.autoGammaScalp);
+      if (typeof s?.autoGsThreshold === 'number' && Number.isFinite(s.autoGsThreshold) && s.autoGsThreshold > 0) setAutoGsThreshold(s.autoGsThreshold);
+      if (typeof s?.autoGsIntervalMs === 'number' && Number.isFinite(s.autoGsIntervalMs) && s.autoGsIntervalMs > 0) setAutoGsIntervalMs(s.autoGsIntervalMs);
+      if (typeof s?.autoGsMaxQty === 'number' && Number.isFinite(s.autoGsMaxQty) && s.autoGsMaxQty > 0) setAutoGsMaxQty(s.autoGsMaxQty);
       if (s?.chartMode === 'spot' || s?.chartMode === 'pnl') setChartMode(s.chartMode);
       if (s?.spotInterval === '60' || s?.spotInterval === '240' || s?.spotInterval === '1440') setSpotInterval(s.spotInterval);
     } catch {}
@@ -209,12 +256,20 @@ export function PositionView({
           showExited: showAllLegs,
           hideExited: !showAllLegs,
           gammaScalping,
+          autoGammaScalp,
+          autoGsThreshold,
+          autoGsIntervalMs,
+          autoGsMaxQty,
           chartMode,
           spotInterval,
         })
       );
     } catch {}
-  }, [showT0, showExpiry, ivShift, rPct, timePos, xZoom, yZoom, useExecPnl, showAllLegs, gammaScalping, chartMode, spotInterval]);
+  }, [showT0, showExpiry, ivShift, rPct, timePos, xZoom, yZoom, useExecPnl, showAllLegs, gammaScalping, autoGammaScalp, autoGsThreshold, autoGsIntervalMs, autoGsMaxQty, chartMode, spotInterval]);
+  React.useEffect(() => {
+    if (!gammaScalping && autoGammaScalp) setAutoGammaScalp(false);
+    if (!gammaScalping && showAutoGsSettings) setShowAutoGsSettings(false);
+  }, [gammaScalping, autoGammaScalp, showAutoGsSettings]);
 
   // Per-position persistence for mouse-positioned view (x/y zoom, time, and display/model params)
   React.useEffect(() => {
@@ -235,6 +290,10 @@ export function PositionView({
         else if (typeof entry.showExited === 'boolean') setShowAllLegs(entry.showExited);
         else if (typeof entry.hideExited === 'boolean') setShowAllLegs(!entry.hideExited);
         if (typeof entry.gammaScalping === 'boolean') setGammaScalping(entry.gammaScalping);
+        if (typeof entry.autoGammaScalp === 'boolean') setAutoGammaScalp(entry.autoGammaScalp);
+        if (typeof entry.autoGsThreshold === 'number' && Number.isFinite(entry.autoGsThreshold) && entry.autoGsThreshold > 0) setAutoGsThreshold(entry.autoGsThreshold);
+        if (typeof entry.autoGsIntervalMs === 'number' && Number.isFinite(entry.autoGsIntervalMs) && entry.autoGsIntervalMs > 0) setAutoGsIntervalMs(entry.autoGsIntervalMs);
+        if (typeof entry.autoGsMaxQty === 'number' && Number.isFinite(entry.autoGsMaxQty) && entry.autoGsMaxQty > 0) setAutoGsMaxQty(entry.autoGsMaxQty);
         if (entry.spotInterval === '60' || entry.spotInterval === '240' || entry.spotInterval === '1440') setSpotInterval(entry.spotInterval);
       }
     } catch {}
@@ -257,11 +316,15 @@ export function PositionView({
         showExited: showAllLegs,
         hideExited: !showAllLegs,
         gammaScalping,
+        autoGammaScalp,
+        autoGsThreshold,
+        autoGsIntervalMs,
+        autoGsMaxQty,
         spotInterval,
       };
       localStorage.setItem('position-view-ui-bypos-v1', JSON.stringify(map));
     } catch {}
-  }, [viewKey, xZoom, yZoom, timePos, ivShift, rPct, showT0, showExpiry, useExecPnl, showAllLegs, gammaScalping, spotInterval]);
+  }, [viewKey, xZoom, yZoom, timePos, ivShift, rPct, showT0, showExpiry, useExecPnl, showAllLegs, gammaScalping, autoGammaScalp, autoGsThreshold, autoGsIntervalMs, autoGsMaxQty, spotInterval]);
 
   // Prepare legs for UI: when Show All is off, hide exited/hidden legs and merge perps by symbol into a single net leg.
   const legsDisplay = React.useMemo<DisplayLeg[]>(() => {
@@ -656,32 +719,35 @@ export function PositionView({
   const gammaScalpPnlValue = useExecPnl ? calc.perpPnlExec : calc.perpPnl;
   const perpEntryPrice = React.useMemo(() => {
     const t = tickers[perpSymbol] || {};
-    const mid = midPrice(t);
-    if (mid != null && Number.isFinite(mid) && mid > 0) return mid;
+    const { bid, ask } = bestBidAsk(t);
+    const mid = (bid != null && ask != null) ? (bid + ask) / 2 : undefined;
     const mark = Number(t?.markPrice);
-    if (Number.isFinite(mark) && mark > 0) return mark;
+    const last = Number(t?.lastPrice);
     const idx = Number(t?.indexPrice);
-    if (Number.isFinite(idx) && idx > 0) return idx;
     const linear = Number(linearIndex?.[perpSymbol]);
-    if (Number.isFinite(linear) && linear > 0) return linear;
-    const spot = Number(calc.spot);
-    if (Number.isFinite(spot) && spot > 0) return spot;
-    const hint = Number(calc.priceHint);
-    if (Number.isFinite(hint) && hint > 0) return hint;
-    return undefined;
-  }, [calc.priceHint, calc.spot, linearIndex, perpSymbol, tickers]);
-  const applyGammaScalpDeltaAction = React.useCallback((action: { kind: 'adjust'; delta: number } | { kind: 'zero' }) => {
-    if (!onAddPerpLeg) return;
+    const candidates = [mid, mark, last, idx, linear].filter((v) => Number.isFinite(v) && Number(v) > 0) as number[];
+    return candidates[0];
+  }, [linearIndex, perpSymbol, tickers]);
+  const applyGammaScalpDeltaAction = React.useCallback((
+    action: { kind: 'adjust'; delta: number } | { kind: 'zero' },
+    opts?: { maxQty?: number }
+  ): boolean => {
+    if (!onAddPerpLeg) return false;
     const currentDelta = Number(calc.greeks.delta);
-    if (!Number.isFinite(currentDelta)) return;
+    if (!Number.isFinite(currentDelta)) return false;
     const diff = action.kind === 'zero' ? (0 - currentDelta) : Number(action.delta);
-    if (!Number.isFinite(diff) || Math.abs(diff) < 1e-6) return;
-    const qty = Number(Math.abs(diff).toFixed(4));
-    if (!(qty > 0)) return;
-    if (!(perpEntryPrice != null && Number.isFinite(perpEntryPrice) && perpEntryPrice > 0)) return;
+    if (!Number.isFinite(diff) || Math.abs(diff) < 1e-6) return false;
+    const maxQty = opts?.maxQty;
+    const baseQty = Number(Math.abs(diff).toFixed(4));
+    const qty = Number.isFinite(maxQty) && maxQty != null && maxQty > 0
+      ? Math.max(0, Math.min(baseQty, maxQty))
+      : baseQty;
+    if (!(qty > 0)) return false;
+    if (!(perpEntryPrice != null && Number.isFinite(perpEntryPrice) && perpEntryPrice > 0)) return false;
     const perpLeg: Leg = { symbol: perpSymbol, strike: 0, optionType: 'C', expiryMs: 0 };
     const side = diff > 0 ? 'long' : 'short';
     onAddPerpLeg({ leg: perpLeg, side, qty, entryPrice: perpEntryPrice, createdAt: Date.now() });
+    return true;
   }, [calc.greeks.delta, onAddPerpLeg, perpEntryPrice, perpSymbol]);
 
   const optionPriceAt = React.useCallback((leg: PositionLeg, S: number, nowMs: number): number => {
@@ -1017,6 +1083,47 @@ export function PositionView({
   }, [closeTimestamp, closeSnapshot]);
 
   const canClosePosition = typeof onClosePosition === 'function' && !alreadyExited;
+
+  React.useEffect(() => {
+    if (!gammaScalping || !autoGammaScalp || !onAddPerpLeg) return;
+    if (alreadyExited) return;
+    const delta = Number(calc.greeks.delta);
+    const threshold = (Number.isFinite(autoGsThreshold) && autoGsThreshold > 0) ? autoGsThreshold : AUTO_GS_DELTA_THRESHOLD;
+    const minInterval = (Number.isFinite(autoGsIntervalMs) && autoGsIntervalMs > 0) ? autoGsIntervalMs : AUTO_GS_MIN_INTERVAL_MS;
+    const maxQty = (Number.isFinite(autoGsMaxQty) && autoGsMaxQty > 0) ? autoGsMaxQty : undefined;
+    if (!Number.isFinite(delta)) return;
+    const hysteresis = threshold * 1.1;
+    const resetBand = threshold * 0.6;
+    const now = Date.now();
+    if (now - mountAtRef.current < minInterval) return;
+    const state = autoGammaRef.current;
+    if (state.pending) {
+      // Unlock once delta is back near band or crossed with smaller magnitude
+      if (Math.abs(delta) <= resetBand || (state.lastSign != null && Math.sign(delta) !== state.lastSign && Math.abs(delta) < threshold * 0.9)) {
+        state.pending = false;
+        state.pendingUntil = undefined;
+      } else {
+        if (state.pendingUntil && now < state.pendingUntil) return;
+        state.pending = false; // timeout fallback
+      }
+    }
+    if (Math.abs(delta) < hysteresis) return;
+    if (state.lastActionDelta != null && Math.abs(delta - state.lastActionDelta) < threshold * 0.25) return;
+    if (state.pending) return;
+    if (now - state.last < minInterval) return;
+    const sign = delta > 0 ? 1 : -1;
+    if (state.lastSign === sign && Math.abs(delta) < threshold * 1.3 && now - state.last < minInterval * 2) return;
+    if (!(perpEntryPrice != null && Number.isFinite(perpEntryPrice) && perpEntryPrice > 0)) return;
+    state.pending = true;
+    const handled = applyGammaScalpDeltaAction({ kind: 'zero' }, { maxQty });
+    if (handled) {
+      state.last = Date.now();
+      state.lastSign = sign;
+      state.lastActionDelta = delta;
+      state.pendingUntil = state.last + Math.max(minInterval * 2, 3000);
+    }
+    // keep pending until delta settles or timeout elapses
+  }, [autoGammaScalp, gammaScalping, calc.greeks.delta, autoGsThreshold, autoGsIntervalMs, autoGsMaxQty, alreadyExited, onAddPerpLeg, applyGammaScalpDeltaAction, perpEntryPrice]);
 
   const formatPerpExitLines = React.useCallback((): string[] => {
     const lines: string[] = [];
@@ -1421,10 +1528,105 @@ export function PositionView({
                     <input type="checkbox" checked={showAllLegs} onChange={(e)=>setShowAllLegs(e.target.checked)} />
                     <span className="muted">Show All</span>
                   </label>
-                  <label style={{display:'flex', alignItems:'center', gap:6}}>
-                    <input type="checkbox" checked={gammaScalping} onChange={(e)=>setGammaScalping(e.target.checked)} />
-                    <span className="muted">Gamma Scalping</span>
-                  </label>
+                  <div style={{display:'flex', flexDirection:'column', gap:4}}>
+                    <label style={{display:'flex', alignItems:'center', gap:6}}>
+                      <input type="checkbox" checked={gammaScalping} onChange={(e)=>setGammaScalping(e.target.checked)} />
+                      <span className="muted">Gamma Scalping</span>
+                    </label>
+                    {gammaScalping && (
+                      <div style={{display:'flex', alignItems:'center', gap:6, paddingLeft:4, position:'relative'}}>
+                        <label style={{display:'flex', alignItems:'center', gap:6, margin:0}}>
+                          <input
+                            type="checkbox"
+                            checked={autoGammaScalp}
+                            onChange={(e)=>setAutoGammaScalp(e.target.checked)}
+                            disabled={!onAddPerpLeg}
+                            title={onAddPerpLeg ? 'Auto delta hedge via perps' : 'Perp add unavailable for this view'}
+                          />
+                          <span className="muted">Auto G.Scalp</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="ghost"
+                          style={{padding: '0 8px', height: 24, lineHeight: '22px'}}
+                          onClick={() => setShowAutoGsSettings((v) => !v)}
+                          title="Gamma scalping settings"
+                        >
+                          ⚙
+                        </button>
+                        {showAutoGsSettings && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: '110%',
+                              left: 0,
+                              zIndex: 6,
+                              background: 'var(--card)',
+                              color: 'var(--fg)',
+                              border: '1px solid var(--border)',
+                              borderRadius: 8,
+                              boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
+                              padding: 10,
+                              minWidth: 260,
+                              display: 'grid',
+                              gridTemplateColumns: '1fr 1fr',
+                              gap: 8,
+                            }}
+                          >
+                            <div style={{gridColumn: '1 / -1', fontWeight: 600}}>Auto Gamma Scalping</div>
+                            <label style={{display:'flex', flexDirection:'column', gap:4}}>
+                              <span className="muted" style={{fontSize:'0.9em'}}>Trigger |Δ| ≥</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0.001"
+                                value={Number.isFinite(autoGsThreshold) ? autoGsThreshold : ''}
+                                onChange={(e) => {
+                                  const parsed = Number(e.target.value);
+                                  setAutoGsThreshold(Number.isFinite(parsed) && parsed > 0 ? parsed : AUTO_GS_DELTA_THRESHOLD);
+                                }}
+                                style={{padding:'6px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--card)', color:'var(--fg)'}}
+                              />
+                            </label>
+                            <label style={{display:'flex', flexDirection:'column', gap:4}}>
+                              <span className="muted" style={{fontSize:'0.9em'}}>Min interval (ms)</span>
+                              <input
+                                type="number"
+                                step="100"
+                                min="250"
+                                value={Number.isFinite(autoGsIntervalMs) ? autoGsIntervalMs : ''}
+                                onChange={(e) => {
+                                  const parsed = Number(e.target.value);
+                                  setAutoGsIntervalMs(Number.isFinite(parsed) && parsed > 0 ? parsed : AUTO_GS_MIN_INTERVAL_MS);
+                                }}
+                                style={{padding:'6px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--card)', color:'var(--fg)'}}
+                              />
+                            </label>
+                            <label style={{display:'flex', flexDirection:'column', gap:4}}>
+                              <span className="muted" style={{fontSize:'0.9em'}}>Max perp qty (optional)</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={autoGsMaxQty ?? ''}
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  if (raw === '') { setAutoGsMaxQty(undefined); return; }
+                                  const parsed = Number(raw);
+                                  setAutoGsMaxQty(Number.isFinite(parsed) && parsed > 0 ? parsed : undefined);
+                                }}
+                                style={{padding:'6px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--card)', color:'var(--fg)'}}
+                              />
+                            </label>
+                            <div style={{gridColumn:'1 / -1', display:'flex', alignItems:'center', justifyContent:'space-between', gap:8}}>
+                              <span className="muted" style={{fontSize:'0.9em'}}>Hedges add/rem per threshold breach.</span>
+                              <button type="button" className="ghost" onClick={() => setShowAutoGsSettings(false)} style={{height:26, lineHeight:'24px', padding:'0 10px'}}>Close</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   {gammaScalping && onAddPerpLeg && (
                     <div style={{display:'flex', gap:4, alignItems:'center', flexWrap:'wrap'}}>
                       {[
@@ -1789,21 +1991,30 @@ export function PositionView({
                 const lines = noteValue.split('\n');
                 const logPattern = /^\s*(NEW\s+)?\d{2}\.\d{2}\.\d{4},\s\d{2}:\d{2}:\d{2}/;
                 const logCount = lines.filter((l) => logPattern.test(l)).length;
-                return lines.map((line, idx) => {
-                  const trimmed = line.trimStart();
-                  const newMatch = trimmed.startsWith('NEW ');
-                  const showNew = newMatch && logCount > 1;
-                  const text = newMatch ? trimmed.replace(/^NEW\s+/, '') : line;
-                  const content = text.length ? text : '\u00a0';
-                  return (
-                    <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {showNew && (
-                        <span style={{ color: '#7a0f0f', fontWeight: 700, fontSize: '0.95em' }}>New</span>
-                      )}
-                      <span style={{ whiteSpace: 'pre-wrap', flex: 1 }}>{content}</span>
-                    </div>
-                  );
-                });
+                return (
+                  <>
+                    {(perpTradeSummary.count > 0 || perpTradeSummary.volume > 0) && (
+                      <div style={{ marginBottom: 8, fontWeight: 600 }}>
+                        {`Trading Volume: $${usdFormatter.format(perpTradeSummary.volume)} | Number of trades: ${perpTradeSummary.count}`}
+                      </div>
+                    )}
+                    {lines.map((line, idx) => {
+                      const trimmed = line.trimStart();
+                      const newMatch = trimmed.startsWith('NEW ');
+                      const showNew = newMatch && logCount > 1;
+                      const text = newMatch ? trimmed.replace(/^NEW\s+/, '') : line;
+                      const content = text.length ? text : '\u00a0';
+                      return (
+                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {showNew && (
+                            <span style={{ color: '#7a0f0f', fontWeight: 700, fontSize: '0.95em' }}>New</span>
+                          )}
+                          <span style={{ whiteSpace: 'pre-wrap', flex: 1 }}>{content}</span>
+                        </div>
+                      );
+                    })}
+                  </>
+                );
               })() : '—'}
             </div>
           )}

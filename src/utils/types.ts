@@ -92,6 +92,7 @@ export interface PositionLeg {
   settledAt?: number; // ms epoch when settlement was captured
   exitPrice?: number; // execution price when leg was manually exited
   exitedAt?: number; // ms epoch when exit was captured
+  removedAt?: number; // ms epoch when leg was removed from the position
 }
 
 export interface Position {
@@ -102,6 +103,7 @@ export interface Position {
   closeSnapshot?: CloseSnapshot;
   note?: string;
   legs: PositionLeg[];
+  removedLegs?: PositionLeg[];
   favorite?: boolean;
   settlements?: SettlementMap;
 }

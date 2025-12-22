@@ -48,6 +48,7 @@ export function EditPositionModal({ id, onClose }: Props) {
   const activePortfolioId = useStore((s) => s.activePortfolioId);
   const baseCreatedAt = Number.isFinite(position?.createdAt) ? Number(position?.createdAt) : Date.now();
   const [draft, setDraft] = React.useState(() => position?.legs?.map((L) => ensureLegCreatedAt(L, baseCreatedAt)) || []);
+  const [removedDraft, setRemovedDraft] = React.useState(() => position?.removedLegs?.map((L) => ensureLegCreatedAt(L, baseCreatedAt)) || []);
   const [portfolioId, setPortfolioId] = React.useState(() => position?.portfolioId ?? activePortfolioId ?? DEFAULT_PORTFOLIO_ID);
   const [tickers, setTickers] = React.useState<Record<string, any>>({});
   const [instruments, setInstruments] = React.useState<InstrumentInfo[]>([]);
@@ -135,6 +136,7 @@ export function EditPositionModal({ id, onClose }: Props) {
     if (!position) return;
     const fallback = Number.isFinite(position.createdAt) ? Number(position.createdAt) : Date.now();
     setDraft(position.legs.map((L) => ensureLegCreatedAt(L, fallback)));
+    setRemovedDraft((position.removedLegs ?? []).map((L) => ensureLegCreatedAt(L, fallback)));
   }, [position?.id]);
 
   React.useEffect(() => {
@@ -291,7 +293,7 @@ export function EditPositionModal({ id, onClose }: Props) {
 
   const save = () => {
     const validPortfolioId = portfolios.some((p) => p.id === portfolioId) ? portfolioId : DEFAULT_PORTFOLIO_ID;
-    updatePosition(id, (p) => ({ ...p, legs: draft, portfolioId: validPortfolioId }));
+    updatePosition(id, (p) => ({ ...p, legs: draft, removedLegs: removedDraft, portfolioId: validPortfolioId }));
     onClose();
   };
 
@@ -299,7 +301,20 @@ export function EditPositionModal({ id, onClose }: Props) {
     setPortfolioId(event.target.value);
   };
 
-  const removeLeg = (idx: number) => setDraft(d => d.filter((_, i) => i !== idx));
+  const removeLeg = (idx: number) => setDraft((d) => {
+    const leg = d[idx];
+    if (!leg) return d;
+    const removedAt = Date.now();
+    setRemovedDraft((prev) => [...prev, { ...leg, removedAt }]);
+    return d.filter((_, i) => i !== idx);
+  });
+  const restoreRemovedLeg = (idx: number) => setRemovedDraft((prev) => {
+    const leg = prev[idx];
+    if (!leg) return prev;
+    setDraft((d) => [...d, { ...leg, removedAt: undefined, hidden: false }]);
+    return prev.filter((_, i) => i !== idx);
+  });
+  const deleteRemovedLeg = (idx: number) => setRemovedDraft((prev) => prev.filter((_, i) => i !== idx));
   const toggleHide = (idx: number) => setDraft(d => d.map((L, i) => i === idx ? { ...L, hidden: !L.hidden } : L));
   const setLegQty = (idx: number, q: number) => setDraft(d => d.map((L,i)=> i===idx ? { ...L, qty: Math.max(0.1, Math.round(q*10)/10) } : L));
 
@@ -606,6 +621,40 @@ export function EditPositionModal({ id, onClose }: Props) {
                     })}
                   </tbody>
                 </table>
+              </div>
+            )}
+            {removedDraft.length > 0 && (
+              <div style={{marginTop:12, border:'1px dashed var(--border)', borderRadius:8, padding:8, display:'flex', flexDirection:'column', gap:8}}>
+                <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, flexWrap:'wrap'}}>
+                  <div style={{fontWeight:600}}>Removed legs</div>
+                  <div className="muted" style={{fontSize:'0.9em'}}>Total: {removedDraft.length}</div>
+                </div>
+                <div style={{display:'flex', flexDirection:'column', gap:6}}>
+                  {removedDraft.map((L, idx) => {
+                    const isPerp = !String(L.leg.symbol).includes('-');
+                    const expiryVal = Number(L.leg.expiryMs);
+                    const label = isPerp ? 'PERP' : `${L.leg.optionType}`;
+                    const expiry = isPerp || !Number.isFinite(expiryVal) ? '—' : new Date(expiryVal).toISOString().slice(0,10);
+                    const strike = isPerp || !Number.isFinite(L.leg.strike) ? '—' : L.leg.strike;
+                    const removedAt = Number((L as any)?.removedAt);
+                    const removedLabel = Number.isFinite(removedAt) ? new Date(removedAt).toLocaleString() : '';
+                    return (
+                      <div key={`removed-${idx}`} style={{display:'grid', gridTemplateColumns:'repeat(6, minmax(0, 1fr)) auto auto', gap:8, alignItems:'center', padding:'8px 10px', background:'rgba(128,128,128,0.12)', borderRadius:6}}>
+                        <div style={{fontWeight:600}}>{label}</div>
+                        <div className="muted">{expiry}</div>
+                        <div className="muted">{strike}</div>
+                        <div>{sideLabel(L.side)}</div>
+                        <div>{L.qty}</div>
+                        <div>{Number.isFinite(L.entryPrice) ? L.entryPrice.toFixed(2) : '—'}</div>
+                        <div className="muted" style={{fontSize:'0.9em'}}>{removedLabel}</div>
+                        <div style={{display:'flex', gap:6, justifyContent:'flex-end'}}>
+                          <button type="button" className="ghost" onClick={() => restoreRemovedLeg(idx)} style={{height:24, lineHeight:'22px', padding:'0 10px'}}>Restore</button>
+                          <button type="button" className="ghost" onClick={() => deleteRemovedLeg(idx)} style={{height:24, lineHeight:'22px', padding:'0 10px', color:'#c62828'}}>Delete Permanently</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
             <div style={{display:'flex', justifyContent:'space-between', marginTop:8}}>
